@@ -271,7 +271,17 @@ async function analyzeWallet(address, options = {}) {
     stats.solPrice = solPrice;
     
     // Generate a roast based on the stats
-    const roast = await generateRoast(walletData);
+    const statsForRoast = {
+      ...stats,
+      // Ensure accurate transaction count by checking multiple sources
+      totalTrades: stats.totalTrades || walletData.signatures?.length || walletData.transactions?.length || 0
+    };
+    console.log('Using stats for roast:', {
+      totalTrades: statsForRoast.totalTrades,
+      success_rate: statsForRoast.successRate,
+      native_balance: statsForRoast.nativeBalance
+    });
+    const roast = await generateRoast(walletData, statsForRoast);
     
     // Generate achievements
     const achievements = generateAchievements(walletData);
@@ -668,7 +678,7 @@ function calculateWalletStats(walletData, solPrice = 100) {
           tx.transaction.message.instructions.forEach(instruction => {
             if (instruction.program === 'system' && instruction.parsed?.type === 'transfer') {
               const lamports = instruction.parsed.info.lamports;
-              amount = (lamports / 1000000000).toFixed(4) + " SOL"; // Convert lamports to SOL
+              amount = (lamports / 1000000000).toFixed(4); // Convert lamports to SOL without adding SOL text
             }
           });
         }
@@ -677,8 +687,13 @@ function calculateWalletStats(walletData, solPrice = 100) {
         if (amount === "--" && tx.description && tx.description.includes("SOL")) {
           const match = tx.description.match(/(\d+\.\d+) SOL/);
           if (match && match[1]) {
-            amount = match[1] + " SOL";
+            amount = match[1]; // Just the number, without adding SOL text again
           }
+        }
+        
+        // Add SOL label only once at the end
+        if (amount !== "--") {
+          amount = `${amount} SOL`;
         }
         
         return {
@@ -1058,8 +1073,9 @@ function generateAchievements(walletData) {
     }
     
     // Gas fees achievements
-    const gasSpent = walletData.gasSpent || 0;
+    const gasSpent = parseFloat(walletData.gasSpent || 0);
     
+    // Only give Gas Guzzler if more than 1 SOL spent on gas
     if (gasSpent > 1) {
       achievements.push({ 
         title: 'Gas Guzzler 🔥', 
@@ -1067,11 +1083,20 @@ function generateAchievements(walletData) {
       });
     }
     
-    if (txCount > 0 && gasSpent / txCount < 0.0001) {
-      achievements.push({ 
-        title: 'Penny Pincher 💰', 
-        description: 'Averaged less than 0.0001 SOL per transaction'
-      });
+    // Calculate gas per transaction accurately
+    if (txCount > 0) {
+      const gasPerTx = gasSpent / txCount;
+      
+      // Debug log to see what's happening
+      console.log(`Gas per tx calculation: ${gasSpent} SOL / ${txCount} txs = ${gasPerTx.toFixed(6)} SOL per tx`);
+      
+      // Only give Penny Pincher if gas per transaction is very low AND we have real transactions
+      if (gasPerTx < 0.0001 && txCount >= 5) {
+        achievements.push({ 
+          title: 'Penny Pincher 💰', 
+          description: `Averaged ${gasPerTx.toFixed(6)} SOL per transaction`
+        });
+      }
     }
     
     // Wallet value achievements in USD
@@ -1213,9 +1238,10 @@ function generateAchievements(walletData) {
 /**
  * Generate a roast for a wallet based on its data
  * @param {Object} walletData - The wallet data
+ * @param {Object} additionalStats - Additional validated stats
  * @returns {Promise<string>} The roast
  */
-async function generateRoast(walletData) {
+async function generateRoast(walletData, additionalStats = {}) {
   const openaiApiKey = process.env.OPENAI_API_KEY;
   
   if (!openaiApiKey) {
@@ -1243,32 +1269,36 @@ async function generateRoast(walletData) {
     console.log('Raw data for roast:', {
       address: walletData.address?.substring(0, 10) + '...',
       hasStats: !!walletData.stats,
-      statsKeys: walletData.stats ? Object.keys(walletData.stats) : []
+      statsKeys: walletData.stats ? Object.keys(walletData.stats) : [],
+      totalTrades: walletData.totalTrades,
+      stats_totalTrades: walletData.stats?.totalTrades,
+      additionalStats_totalTrades: additionalStats?.totalTrades
     });
     
     // Safely extract the wallet address
     const walletPreview = walletData.address ? `${walletData.address.slice(0, 6)}...${walletData.address.slice(-4)}` : "Unknown";
     
-    // Extract data directly from walletData.stats if available
-    let stats;
-    if (walletData.stats && typeof walletData.stats === 'object') {
-      console.log('Using data from walletData.stats');
-      stats = walletData.stats;
-    } else {
-      console.log('Using data directly from walletData');
-      stats = walletData;
-    }
+    // Use additionalStats as priority, then fall back to normal extraction
+    // Extract all values, with explicit fallbacks and parse as numbers
+    const totalTrades = parseInt(additionalStats.totalTrades || walletData.stats?.totalTrades || walletData.totalTrades || 0);
+    const successRate = parseInt(additionalStats.successRate || walletData.stats?.successRate || walletData.successRate || 0);
+    const nativeBalance = parseFloat(additionalStats.nativeBalance || walletData.stats?.nativeBalance || walletData.nativeBalance || 0);
     
-    // Extract all values, with explicit fallbacks
-    const totalTrades = parseInt(stats.totalTrades || walletData.totalTrades || 0);
-    const successRate = parseInt(stats.successRate || walletData.successRate || 0);
-    const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
+    // Log what we're actually using
+    console.log('Final transaction data for roast:', {
+      totalTrades,
+      successRate,
+      nativeBalance
+    });
     
     // Get SOL price directly from sources that have it
     let solPrice;
-    if (stats.solPrice && !isNaN(parseFloat(stats.solPrice))) {
-      solPrice = parseFloat(stats.solPrice);
-      console.log(`Using SOL price from stats: $${solPrice}`);
+    if (additionalStats.solPrice && !isNaN(parseFloat(additionalStats.solPrice))) {
+      solPrice = parseFloat(additionalStats.solPrice);
+      console.log(`Using SOL price from additionalStats: $${solPrice}`);
+    } else if (walletData.stats?.solPrice && !isNaN(parseFloat(walletData.stats.solPrice))) {
+      solPrice = parseFloat(walletData.stats.solPrice);
+      console.log(`Using SOL price from walletData.stats: $${solPrice}`);
     } else if (walletData.solPrice && !isNaN(parseFloat(walletData.solPrice))) {
       solPrice = parseFloat(walletData.solPrice);
       console.log(`Using SOL price from walletData: $${solPrice}`);
@@ -1291,26 +1321,26 @@ async function generateRoast(walletData) {
     });
     
     // Create a thorough prompt for better roasts
-    const prompt = `Generate an ABSOLUTELY BRUTAL, yet genuinely funny roast of this crypto wallet:
+    const prompt = `ROAST THIS WALLET WITH STREET/HOOD SLANG:
 
 WALLET DATA:
 - SOL Balance: ${nativeBalance.toFixed(4)} SOL (worth $${walletValueUsd.toFixed(2)})
 - Total Transactions: ${totalTrades}
 - Success Rate: ${successRate}%
 
-BE THE MOST SAVAGELY FUNNY CRYPTO COMEDIAN YOU CAN BE:
-- Channel Dave Chappelle, Anthony Jeselnik, and crypto Twitter's finest haters
-- Use SPECIFIC details about this wallet (don't make up fake numbers)
-- Reference their exact SOL balance of ${nativeBalance.toFixed(4)} SOL
-- Reference their exact wallet value of $${walletValueUsd.toFixed(2)}
-- Reference their ${totalTrades} transactions and ${successRate}% success rate
-- Use crypto slang, memes, and references that crypto natives would laugh at
-- Add specific trading insults like "buying the top" or "selling the bottom"
-- Make this BRUTALLY personal but hilariously clever
+KEEP IT 100 WITH THESE INSTRUCTIONS:
+- Talk like you from the hood - use slang like "no cap", "bussin", "fr fr", "on god", "drippy", etc.
+- Use ACTUAL wallet stats in your roast - don't make up fake numbers
+- This wallet got ${nativeBalance.toFixed(4)} SOL worth $${walletValueUsd.toFixed(2)}
+- This wallet made ${totalTrades} transactions with ${successRate}% success rate
+- If they broke, flame them for it
+- If they got paper hands or panic sold, clown them
+- If they holding bags, roast them about it
+- Talk about them buying high and selling low if they losing
+- Keep it mad disrespectful but funny af
 
-The best roast will be a devastating commentary on their wallet that would make crypto Twitter laugh out loud. BE UNFORGETTABLE AND SAVAGE.
-
-IMPORTANT: DO NOT generate a generic roast that could apply to any wallet - focus on their SPECIFIC stats and make it hit hard!`;
+THE ROAST SHOULD SOUND LIKE IT'S COMING FROM A STREET-SMART CRYPTO GANGSTA. 
+USE AUTHENTIC-SOUNDING STREET SLANG BUT MAKE SURE IT'S STILL UNDERSTANDABLE.`;
     
     // Use the right model for better roasts 
     const response = await openai.chat.completions.create({
@@ -1318,7 +1348,7 @@ IMPORTANT: DO NOT generate a generic roast that could apply to any wallet - focu
       messages: [
         { 
           role: "system", 
-          content: "You are CryptoRoastGPT, the most savage, witty and hilarious crypto wallet roaster ever created. You combine the brutal honesty of a trading desk with the razor-sharp wit of the best stand-up comedians. Your roasts are SPECIFIC to each wallet, painfully accurate, and use actual wallet data to create devastating takedowns that even the wallet owner would laugh at."
+          content: "You are ThugRoastGPT, a hardcore street-smart crypto roaster from the hood. You talk with raw street slang, use terms like 'no cap', 'fr fr', 'bussin', 'sus', etc. Your roasts are SAVAGE and use actual wallet data to flame people. You sound like a mix of a drill rapper and crypto trader. Keep your roasts short, disrespectful but hilariously accurate. NEVER break character."
         },
         { role: "user", content: prompt }
       ],
