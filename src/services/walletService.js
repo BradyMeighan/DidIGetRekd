@@ -492,52 +492,54 @@ async function fetchWalletData(address) {
  * @param {number} solPrice - Current SOL price in USD
  * @returns {Object} - Wallet statistics
  */
-function calculateWalletStats(walletData, solPrice) {
-  console.log('Calculating wallet stats from data:', Object.keys(walletData));
-  
+function calculateWalletStats(walletData, solPrice = 100) {
   try {
-    // Use signatures for count and timestamps if available
+    console.log('Calculating wallet stats from data:', Object.keys(walletData));
+    
+    // Extract relevant data
+    const address = walletData.address;
+    const nativeBalance = walletData.nativeBalance || 0;
     const signatures = walletData.signatures || [];
     const transactions = walletData.transactions || [];
+    const tokenAccounts = walletData.tokenAccounts || [];
     
-    // Get native SOL balance
-    const nativeBalance = walletData.nativeBalance || 0;
-    
-    // Calculate total tx count from signatures (more accurate)
-    const totalTrades = signatures.length;
-    
-    // Count failed transactions
-    const failedTxCount = signatures.filter(sig => sig.err !== null).length;
-    
-    // Count transaction types based on available data
-    let transfersCount = 0;
-    let swapCount = 0;
-    let mintCount = 0;
+    // Calculate transaction metrics
+    let totalTrades = signatures.length;
+    let failedTxCount = 0;
     let totalGasSpent = 0;
+    let swapCount = 0;
+    let transfersCount = 0;
+    let mintCount = 0;
     
-    // Process detailed transaction data for more accurate metrics
-    transactions.forEach(tx => {
-      // Calculate gas fees from transaction data
-      if (tx.meta?.fee) {
-        totalGasSpent += tx.meta.fee / 1000000000; // Convert lamports to SOL
-      } else if (tx.fee) {
-        totalGasSpent += tx.fee / 1000000000; // Alternative format
-      }
-      
-      // Try to determine transaction type
-      const description = tx.description || '';
-      const instructions = tx.transaction?.message?.instructions || [];
-      
-      if (description.toLowerCase().includes('transfer') || 
-          instructions.some(i => i.program === 'system' && i.parsed?.type === 'transfer')) {
-        transfersCount++;
-      } else if (description.toLowerCase().includes('swap')) {
-        swapCount++;
-      } else if (description.toLowerCase().includes('mint') || 
-                instructions.some(i => i.program === 'spl-token' && i.parsed?.type === 'mintTo')) {
-        mintCount++;
-      }
-    });
+    // Parse transaction details from full transaction data if available
+    if (transactions.length > 0) {
+      transactions.forEach(tx => {
+        if (tx.err || tx.meta?.err || !tx.successful) {
+          failedTxCount++;
+        }
+        
+        // Add gas spent (in SOL)
+        if (tx.fee || tx.meta?.fee) {
+          totalGasSpent += (tx.fee || tx.meta?.fee) / 1000000000; // Convert lamports to SOL
+        }
+        
+        // Try to identify transaction type
+        const description = tx.description || '';
+        
+        // Extract more info from instructions if available
+        const instructions = tx.transaction?.message?.instructions || [];
+        
+        if (description.toLowerCase().includes('transfer') || 
+            instructions.some(i => i.program === 'system' && i.parsed?.type === 'transfer')) {
+          transfersCount++;
+        } else if (description.toLowerCase().includes('swap')) {
+          swapCount++;
+        } else if (description.toLowerCase().includes('mint') || 
+                  instructions.some(i => i.program === 'spl-token' && i.parsed?.type === 'mintTo')) {
+          mintCount++;
+        }
+      });
+    }
     
     // Get first and last activity dates
     let firstActivityDate, lastActivityDate;
@@ -577,61 +579,36 @@ function calculateWalletStats(walletData, solPrice) {
       accountAgeDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
     }
     
-    // Calculate transactions per day (activity level)
-    const txPerDay = accountAgeDays > 0 ? totalTrades / accountAgeDays : 0;
+    // Calculate average transactions per day
+    const txPerDay = accountAgeDays > 0 ? (totalTrades / accountAgeDays) : 0;
     
-    // Calculate score
-    const score = calculateScore({
-      totalTrades,
-      successRate,
-      avgGasPerTx,
-      nativeBalance,
-      accountAgeDays,
-      txPerDay
-    });
+    // Get token holdings
+    const tokens = [];
     
-    // Generate transaction history
-    const txHistory = generateTxHistory(signatures, transactions);
+    // Add SOL balance
+    if (nativeBalance) {
+      tokens.push({ 
+        name: 'SOL', 
+        amount: parseFloat(nativeBalance).toFixed(4), 
+        value: (nativeBalance * solPrice).toFixed(2) 
+      });
+    }
     
-    // Generate token holdings - start with SOL which is always accurate
-    const tokens = [
-      // SOL balance is reliable
-      { name: 'SOL', amount: nativeBalance.toFixed(4), value: (nativeBalance * solPrice).toFixed(2) } // Use actual SOL price
-    ];
-    
-    // Add token accounts if available
-    if (walletData.tokenAccounts && walletData.tokenAccounts.length > 0) {
-      console.log(`Processing ${walletData.tokenAccounts.length} token accounts for display`);
-      
-      // Process token accounts to add to the tokens array
-      walletData.tokenAccounts.forEach((acct, index) => {
+    // Add any token accounts with balances
+    if (tokenAccounts && tokenAccounts.length > 0) {
+      tokenAccounts.forEach((acct, index) => {
         try {
           if (acct.account?.data?.parsed?.info) {
             const tokenInfo = acct.account.data.parsed.info;
             const mint = tokenInfo.mint;
             const tokenAmount = tokenInfo.tokenAmount;
             
-            // More detailed logging
-            console.log(`Token account ${index}:`, {
-              mint: mint,
-              decimals: tokenAmount?.decimals,
-              uiAmount: tokenAmount?.uiAmount,
-              uiAmountString: tokenAmount?.uiAmountString
-            });
-            
-            if (tokenAmount && parseFloat(tokenAmount.uiAmount) > 0) {
-              // Use different naming strategies based on what we have
-              let tokenName = mint.slice(0, 4) + '...';
-              
-              // Log the mint address for reference
-              console.log(`Adding token with mint: ${mint} and amount: ${tokenAmount.uiAmount}`);
-              
+            if (tokenAmount && tokenAmount.uiAmount > 0) {
               tokens.push({
-                name: tokenName,
+                name: mint.slice(0, 4) + '...',
                 mint: mint,
-                amount: tokenAmount.uiAmountString || tokenAmount.uiAmount.toString(),
-                value: '?', // We don't have price data
-                decimals: tokenAmount.decimals
+                amount: tokenAmount.uiAmount.toString(),
+                value: '?' // Would need a price oracle for non-SOL tokens
               });
             } else {
               console.log(`Skipping zero balance token: ${mint}`);
@@ -657,7 +634,14 @@ function calculateWalletStats(walletData, solPrice) {
     
     // Generate achievements with additional metrics
     const achievements = generateAchievements({
-      score,
+      score: calculateScore({
+        totalTrades,
+        successRate, 
+        avgGasPerTx,
+        nativeBalance,
+        accountAgeDays,
+        txPerDay
+      }),
       totalTrades,
       successRate, 
       totalGasSpent,
@@ -670,46 +654,46 @@ function calculateWalletStats(walletData, solPrice) {
       tokens: tokens.length
     });
     
+    // Generate transaction history data
+    const txHistory = generateTransactionHistory(signatures, transactions);
+    
     // Create summary stats for display
     const portfolioValue = nativeBalance * solPrice;
     const portfolioValueFormatted = portfolioValue.toFixed(2);
     
     return {
       address: walletData.address || "unknown",
+      nativeBalance: parseFloat(nativeBalance).toFixed(4),
       totalTrades,
-      // Replace PnL with a different metric that we can calculate
-      walletValue: portfolioValueFormatted,
-      nativeBalance: nativeBalance.toFixed(4),
       gasSpent: totalGasSpent.toFixed(6),
       successRate,
-      avgGasPerTx: avgGasPerTx.toFixed(6),
-      transfersCount,
-      swapCount,
-      mintCount,
-      failedTxCount,
+      solPrice,
       firstActivityDate,
       lastActivityDate,
       accountAgeDays,
-      txPerDay: txPerDay.toFixed(2),
-      score: totalTrades > 0 ? score : null,
-      // Visualization data
-      txHistory,
+      score: calculateScore({
+        totalTrades,
+        successRate, 
+        avgGasPerTx,
+        nativeBalance,
+        accountAgeDays,
+        txPerDay
+      }),
+      avgGasPerTx: avgGasPerTx.toFixed(6),
+      walletValue: portfolioValueFormatted,
       tokens,
-      recentTransactions,
-      // Remove NFTs completely
-      achievements: totalTrades > 0 ? achievements : [],
-      solPrice
+      txHistory,
+      swapCount,
+      transfersCount,
+      mintCount,
+      achievements,
+      recentTransactions // Add this to ensure we include recent transactions
     };
   } catch (error) {
     console.error('Error calculating wallet stats:', error);
-    console.error(error.stack);
-    
-    // Return basic information with error
     return {
-      address: walletData.address || "unknown",
-      nativeBalance: walletData.nativeBalance?.toFixed(4) || "0",
-      error: "CALCULATION_ERROR",
-      message: error.message
+      error: true,
+      message: 'Error calculating wallet statistics: ' + error.message
     };
   }
 }
@@ -717,7 +701,7 @@ function calculateWalletStats(walletData, solPrice) {
 /**
  * Generate transaction history for the chart
  */
-function generateTxHistory(signatures, transactions) {
+function generateTransactionHistory(signatures, transactions) {
   console.log(`Generating transaction history from ${signatures?.length || 0} signatures and ${transactions?.length || 0} transactions`);
   
   // Create a map for the last 30 days
