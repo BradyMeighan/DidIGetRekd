@@ -1475,11 +1475,11 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
     console.log('Saving wallet to leaderboard...');
     
     // Get the SOL price from stats or use default
-    const solPrice = parseFloat(stats.solPrice || 100);
+    const solPrice = parseFloat(stats.solPrice || walletData.solPrice || 100);
     console.log(`Using SOL price: $${solPrice}`);
     
     // Get the native SOL balance
-    const nativeBalance = parseFloat(stats.nativeBalance || 0);
+    const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
     console.log(`Native SOL balance: ${nativeBalance}`);
     
     // Calculate wallet value in USD
@@ -1492,7 +1492,7 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
       totalTrades: stats.totalTrades || 0,
       gasSpent: stats.gasSpent || 0,
       pnl: stats.pnl || 0,
-      walletValue, // USD value
+      walletValue: walletValue.toFixed(2), // USD value
       nativeBalance, // Raw SOL balance (not USD divided by price)
       solPrice, // Store the SOL price used for calculations
       lastRoast: roast
