@@ -17,8 +17,29 @@ app.use(cors({
 app.use(express.json());
 
 // Routes
+console.log('Setting up API routes');
 app.use('/api/wallet', walletRoutes);
+console.log('Wallet routes mounted at /api/wallet');
 app.use('/api/leaderboard', leaderboardRoutes);
+console.log('Leaderboard routes mounted at /api/leaderboard');
+
+// Debug: Print all registered routes
+console.log('Registered routes:');
+app._router.stack.forEach(middleware => {
+  if (middleware.route) {
+    // Routes registered directly
+    console.log(`${Object.keys(middleware.route.methods)} ${middleware.route.path}`);
+  } else if (middleware.name === 'router') {
+    // Router middleware
+    middleware.handle.stack.forEach(handler => {
+      if (handler.route) {
+        const path = handler.route.path;
+        const methods = Object.keys(handler.route.methods);
+        console.log(`${methods} ${middleware.regexp} ${path}`);
+      }
+    });
+  }
+});
 
 // Health check endpoint - respond immediately
 app.get('/health', (req, res) => {
@@ -57,6 +78,7 @@ const connectToMongoDB = async () => {
     }
 
     console.log('Attempting to connect to MongoDB...');
+    console.log('MongoDB connection string:', mongoUri.replace(/mongodb(\+srv)?:\/\/[^:]+:[^@]+@/, 'mongodb$1://****:****@'));
     
     await mongoose.connect(mongoUri, {
       useNewUrlParser: true,
@@ -67,12 +89,17 @@ const connectToMongoDB = async () => {
     
     console.log('Connected to MongoDB successfully');
     
+    // Check database collections
+    const collections = await mongoose.connection.db.listCollections().toArray();
+    console.log('MongoDB collections:', collections.map(c => c.name));
+    
     // Start server
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT}`);
     });
   } catch (err) {
     console.error('Failed to connect to MongoDB:', err.message);
+    console.error('MongoDB connection error details:', err);
     process.exit(1);
   }
 };

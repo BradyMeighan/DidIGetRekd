@@ -150,7 +150,7 @@ router.get('/stats', async (req, res) => {
  * POST /api/wallet/:address/leaderboard
  * Add or update a wallet on the leaderboard
  */
-router.post('/api/wallet/:address/leaderboard', async (req, res) => {
+router.post('/:address/leaderboard', async (req, res) => {
   try {
     const { address } = req.params;
     const { score, totalTrades, gasSpent, pnl, lastRoast } = req.body;
