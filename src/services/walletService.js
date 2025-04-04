@@ -27,23 +27,28 @@ async function fetchSolPrice() {
     const oneHourMs = 60 * 60 * 1000;
     
     if (solPriceCache.price && solPriceCache.timestamp && (now - solPriceCache.timestamp < oneHourMs)) {
-      console.log('Using cached SOL price:', solPriceCache.price);
+      console.log(`Using cached SOL price: $${solPriceCache.price} (cached ${Math.floor((now - solPriceCache.timestamp) / 60000)} minutes ago)`);
       return solPriceCache.price;
     }
     
     console.log('Fetching fresh SOL price from CoinGecko');
     const apiKey = process.env.COINGECKO_API_KEY;
     
-    // Configure headers based on whether we have an API key
+    // Configure headers and URL based on API key
     const headers = {};
+    
+    // For demo API keys, use the regular API URL, not the pro-api URL
+    // Demo keys start with 'CG-' prefix
+    const isProKey = apiKey && !apiKey.startsWith('CG-');
+    const baseUrl = isProKey ? 'https://pro-api.coingecko.com' : 'https://api.coingecko.com';
+    
     if (apiKey) {
-      console.log('Using CoinGecko API key for request');
+      console.log(`Using CoinGecko API key (${isProKey ? 'Pro' : 'Demo'} key detected)`);
       headers['x-cg-pro-api-key'] = apiKey;
     }
     
-    const url = apiKey 
-      ? 'https://pro-api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'
-      : 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd';
+    const url = `${baseUrl}/api/v3/simple/price?ids=solana&vs_currencies=usd`;
+    console.log(`Using CoinGecko URL: ${url}`);
     
     const response = await fetch(url, { headers });
     const data = await response.json();
@@ -109,6 +114,72 @@ async function analyzeWallet(address, options = {}) {
     // Get comprehensive wallet data
     const walletData = await fetchWalletData(address);
     console.log('Wallet data retrieved:', Object.keys(walletData));
+    
+    // If we've checked direct signatures but failed to find them, check via test endpoint
+    if (!walletData.signatures?.length) {
+      console.log('No signatures found in initial fetch, trying test endpoint...');
+      try {
+        const apiKey = process.env.HELIUS_API_KEY;
+        const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+        
+        // Try the method that works in the test endpoint
+        console.log('Directly querying signatures for consistency with test endpoint');
+        const testSignaturesResponse = await axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 7,
+          method: "getSignaturesForAddress",
+          params: [address, { limit: 50 }]
+        });
+        
+        if (testSignaturesResponse.data?.result && testSignaturesResponse.data.result.length > 0) {
+          console.log(`Found ${testSignaturesResponse.data.result.length} signatures in test fetch`);
+          
+          // Save the signatures
+          walletData.signatures = testSignaturesResponse.data.result;
+          
+          // Fetch transaction details if needed
+          if (!walletData.transactions?.length) {
+            walletData.transactions = [];
+            const transactionsToFetch = walletData.signatures.slice(0, 10);
+            
+            for (const sigData of transactionsToFetch) {
+              try {
+                const txResponse = await axios.post(rpcUrl, {
+                  jsonrpc: "2.0",
+                  id: 8,
+                  method: "getTransaction",
+                  params: [
+                    sigData.signature,
+                    { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+                  ]
+                });
+                
+                if (txResponse.data?.result) {
+                  // Add more easily accessible metadata
+                  const tx = txResponse.data.result;
+                  tx.blockTime = tx.blockTime || sigData.blockTime;
+                  tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
+                  tx.successful = sigData.err === null;
+                  tx.fee = tx.meta?.fee || 0;
+                  tx.signature = sigData.signature;
+                  
+                  // Add a simple description
+                  tx.description = "SOL Transaction";
+                  
+                  walletData.transactions.push(tx);
+                }
+              } catch (err) {
+                console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
+              }
+            }
+            
+            console.log(`Retrieved ${walletData.transactions.length} transaction details from test fetch`);
+          }
+        }
+      } catch (err) {
+        console.error('Error in fallback test endpoint fetch:', err.message);
+      }
+    }
     
     // Always include at least the basic wallet info
     const baseStats = {
@@ -256,12 +327,24 @@ async function fetchWalletData(address) {
     let signaturesFound = false;
     
     try {
+      console.log(`Making RPC request to ${rpcUrl} for getSignaturesForAddress`);
       const signaturesResponse = await axios.post(rpcUrl, {
         jsonrpc: "2.0",
         id: 3,
         method: "getSignaturesForAddress",
         params: [address, { limit: 50 }]
       });
+      
+      // Log full response for debugging
+      if (signaturesResponse.data) {
+        console.log(`Got response with status ${signaturesResponse.status}, data type: ${typeof signaturesResponse.data}`);
+        
+        if (signaturesResponse.data.result) {
+          console.log(`Found ${signaturesResponse.data.result.length} signatures in result`);
+        } else {
+          console.log('No result field in response:', Object.keys(signaturesResponse.data));
+        }
+      }
       
       if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
         walletData.signatures = signaturesResponse.data.result;
@@ -335,10 +418,24 @@ async function fetchWalletData(address) {
         
         console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
       } else {
-        console.log('No transaction signatures found.');
+        console.log('No transaction signatures found in response.');
+        
+        // If response has different structure, try to extract signatures
+        if (signaturesResponse.data && typeof signaturesResponse.data === 'object') {
+          console.log('Checking alternative response formats');
+          if (signaturesResponse.data.signatures?.result) {
+            walletData.signatures = signaturesResponse.data.signatures.result;
+            signaturesFound = true;
+            console.log(`Found ${walletData.signatures.length} signatures in alternative location`);
+          }
+        }
       }
     } catch (error) {
       console.error('Error fetching transaction signatures:', error.message);
+      if (error.response) {
+        console.error('Response status:', error.response.status);
+        console.error('Response data:', error.response.data);
+      }
     }
     
     // 4. FALLBACK: If we didn't find signatures, try getConfirmedSignaturesForAddress2
