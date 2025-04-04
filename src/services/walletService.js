@@ -162,18 +162,29 @@ async function fetchWalletTransactions(address) {
     
     console.log(`Fetching transactions for wallet: ${address}`);
     
-    const url = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}`;
-    console.log(`Using Helius API URL: ${url}`);
+    // Use the Helius API to get transactions
+    const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}`;
+    console.log(`Using Helius transactions API: ${txUrl}`);
+    const txResponse = await axios.get(txUrl);
     
-    const response = await axios.get(url);
-    
-    if (response.data && Array.isArray(response.data.transactions)) {
-      console.log(`Retrieved ${response.data.transactions.length} transactions from Helius`);
-      return response.data.transactions;
-    } else {
-      console.warn('Unexpected response format from Helius API');
-      return [];
+    // Log a sample transaction to understand the data structure
+    if (txResponse.data?.transactions?.length > 0) {
+      console.log('Sample transaction structure:');
+      console.log(JSON.stringify(txResponse.data.transactions[0], null, 2));
     }
+    
+    // Also get the balance using RPC
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+    const rpcResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getBalance",
+      params: [address]
+    });
+    console.log('RPC balance response:', rpcResponse.data);
+    
+    // Return the transactions
+    return txResponse.data?.transactions || [];
   } catch (error) {
     console.error('Error fetching transactions from Helius:', error.message);
     return [];
@@ -193,6 +204,12 @@ function calculateWalletStats(transactions) {
   }
   
   try {
+    // Log a sample transaction for debugging
+    if (transactions.length > 0) {
+      console.log('Sample transaction for stat calculation:');
+      console.log(JSON.stringify(transactions[0], null, 2));
+    }
+    
     // Sort transactions by time (most recent first)
     const sortedTxs = [...transactions].sort((a, b) => {
       return new Date(b.timestamp) - new Date(a.timestamp);
@@ -208,14 +225,19 @@ function calculateWalletStats(transactions) {
     
     // Process each transaction
     transactions.forEach(tx => {
-      // Count transaction types (if provided by Helius)
-      // Note: These may not be accurate as Helius doesn't always categorize transactions
-      if (tx.type === 'TRANSFER' || tx.description?.includes('transfer')) transfersCount++;
-      if (tx.type === 'SWAP' || tx.description?.includes('swap')) swapCount++;
-      if (tx.type === 'MINT' || tx.type === 'NFT_MINT' || tx.description?.includes('mint')) mintCount++;
+      // Count transaction types based on what we can determine
+      if (tx.description?.includes('transfer') || tx.description?.includes('Transfer')) {
+        transfersCount++;
+      } else if (tx.description?.includes('swap') || tx.description?.includes('Swap')) {
+        swapCount++;
+      } else if (tx.description?.includes('mint') || tx.description?.includes('Mint')) {
+        mintCount++;
+      }
       
       // Count failed transactions
-      if (tx.status === 'failed' || tx.successful === false) failedTxCount++;
+      if (tx.status === 'failed' || tx.successful === false) {
+        failedTxCount++;
+      }
       
       // Calculate gas fees - CRITICAL FIX: Convert lamports to SOL
       if (tx.fee) {
@@ -245,11 +267,15 @@ function calculateWalletStats(transactions) {
     // Generate transaction history for visualization
     const txHistory = generateTxHistory(transactions);
     
-    // Generate token holdings (simplified)
-    const tokens = generateSimplifiedTokenHoldings(transactions, totalTrades);
+    // Generate simplified token holdings (we can't reliably determine this from transaction history)
+    const tokens = [
+      { name: 'SOL', amount: Math.max(0.1, totalTrades / 20).toFixed(2), value: (totalTrades * 2).toFixed(2) }
+    ];
     
-    // Generate NFT holdings (simplified)
-    const nfts = generateSimplifiedNFTs(mintCount);
+    // Generate simplified NFT holdings (also can't reliably determine)
+    const nfts = [
+      { name: 'NFT Collection', floor: 0, owned: mintCount > 0 ? 1 : 0 }
+    ];
     
     // Generate achievements
     const achievements = generateAchievements({
@@ -263,7 +289,7 @@ function calculateWalletStats(transactions) {
     return {
       address: transactions[0]?.account || transactions[0]?.address || "unknown",
       totalTrades,
-      // Simplified PnL calculation - not very accurate from Helius data
+      // PnL can't be accurately determined from transaction history alone
       pnl: "Unknown",
       gasSpent: totalGasSpent.toFixed(4),
       successRate,
@@ -283,6 +309,7 @@ function calculateWalletStats(transactions) {
     };
   } catch (error) {
     console.error('Error calculating wallet stats:', error);
+    console.error(error.stack);
     return generateMockData();
   }
 }

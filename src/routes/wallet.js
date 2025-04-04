@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const walletService = require('../services/walletService');
+const axios = require('axios');
 
 /**
  * @route GET /api/wallet/test
@@ -239,6 +240,60 @@ router.post('/:address/roast', async (req, res) => {
   } catch (error) {
     console.error('Error generating new roast:', error);
     res.status(500).json({ error: 'Error generating roast' });
+  }
+});
+
+/**
+ * @route GET /api/wallet/helius-test/:address
+ * @desc Debug endpoint to see raw Helius API data
+ */
+router.get('/helius-test/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    console.log(`Testing Helius API for wallet: ${address}`);
+    
+    // Check API key
+    const heliusApiKey = process.env.HELIUS_API_KEY;
+    if (!heliusApiKey) {
+      return res.status(400).json({ error: 'HELIUS_API_KEY not set in environment variables' });
+    }
+    
+    // 1. First test: get balances
+    const balanceUrl = `https://api.helius.xyz/v0/addresses/${address}/balances?api-key=${heliusApiKey}`;
+    console.log('Calling Helius balances endpoint:', balanceUrl);
+    const balanceResponse = await axios.get(balanceUrl);
+    
+    // 2. Second test: get transactions
+    const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${heliusApiKey}`;
+    console.log('Calling Helius transactions endpoint:', txUrl);
+    const txResponse = await axios.get(txUrl);
+    
+    // 3. Third test: try an RPC call
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+    console.log('Calling Helius RPC endpoint with getBalance:', rpcUrl);
+    const rpcResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getBalance",
+      params: [address]
+    });
+    
+    // Return all test results
+    res.json({
+      balance: balanceResponse.data,
+      transactions: {
+        count: txResponse.data.transactions?.length || 0,
+        sample: txResponse.data.transactions?.slice(0, 2) || []
+      },
+      rpc: rpcResponse.data
+    });
+  } catch (error) {
+    console.error('Error testing Helius API:', error.message);
+    res.status(500).json({ 
+      error: 'Error testing Helius API', 
+      message: error.message,
+      stack: error.stack
+    });
   }
 });
 
