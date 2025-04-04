@@ -62,6 +62,14 @@ const WalletSchema = new mongoose.Schema({
   recentTransactions: {
     type: Array,
     default: []
+  },
+  txHistory: {
+    type: Array,
+    default: []
+  },
+  weeklyTxData: {
+    type: Array,
+    default: []
   }
 }, { timestamps: false });
 

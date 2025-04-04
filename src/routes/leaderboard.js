@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     const leaderboard = await Wallet.find({})
       .sort(sortObj)
       .limit(limit)
-      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen lastUpdated createdAt tokens achievements recentTransactions')
+      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen lastUpdated createdAt tokens achievements recentTransactions txHistory weeklyTxData')
       .lean();
       
     // Process wallets for response and ensure numeric fields are numbers
@@ -47,7 +47,9 @@ router.get('/', async (req, res) => {
         lastUpdated: wallet.lastUpdated,
         tokens: wallet.tokens || [],
         achievements: wallet.achievements || [],
-        recentTransactions: wallet.recentTransactions || []
+        recentTransactions: wallet.recentTransactions || [],
+        txHistory: wallet.txHistory || [],
+        weeklyTxData: wallet.weeklyTxData || []
       };
     });
     
@@ -179,6 +181,14 @@ router.post('/:address/leaderboard', async (req, res) => {
     
     if (req.body.recentTransactions && Array.isArray(req.body.recentTransactions)) {
       updateData.recentTransactions = req.body.recentTransactions;
+    }
+    
+    if (req.body.txHistory && Array.isArray(req.body.txHistory)) {
+      updateData.txHistory = req.body.txHistory;
+    }
+    
+    if (req.body.weeklyTxData && Array.isArray(req.body.weeklyTxData)) {
+      updateData.weeklyTxData = req.body.weeklyTxData;
     }
     
     const result = await Wallet.findOneAndUpdate(
