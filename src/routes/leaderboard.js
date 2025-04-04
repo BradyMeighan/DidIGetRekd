@@ -14,7 +14,7 @@ router.get('/', async (req, res) => {
     console.log('Leaderboard query params:', { sort, limit, page, search });
     
     // Validate sort parameter
-    const validSortFields = ['score', 'pnl', 'totalTrades', 'gasSpent'];
+    const validSortFields = ['score', 'pnl', 'totalTrades', 'walletValue', 'gasSpent'];
     if (!validSortFields.includes(sort)) {
       return res.status(400).json({ error: `Invalid sort parameter. Must be one of: ${validSortFields.join(', ')}` });
     }
@@ -50,7 +50,7 @@ router.get('/', async (req, res) => {
       .sort({ [sort]: -1 }) // Sort in descending order
       .skip(skip)
       .limit(parsedLimit)
-      .select('address score pnl totalTrades gasSpent achievements roasts');
+      .select('address score pnl totalTrades gasSpent walletValue achievements roasts');
     
     console.log(`Found ${wallets.length} wallets matching query`);
     
@@ -66,6 +66,7 @@ router.get('/', async (req, res) => {
       pnl: wallet.pnl,
       totalTrades: wallet.totalTrades,
       gasSpent: wallet.gasSpent,
+      walletValue: wallet.walletValue || 0,
       achievements: wallet.achievements,
       lastRoast: wallet.roasts[wallet.roasts.length - 1]?.text || null
     }));
@@ -103,7 +104,9 @@ router.get('/stats', async (req, res) => {
           totalGasSpent: { $sum: '$gasSpent' },
           averageGasSpent: { $avg: '$gasSpent' },
           totalTrades: { $sum: '$totalTrades' },
-          averageTrades: { $avg: '$totalTrades' }
+          averageTrades: { $avg: '$totalTrades' },
+          totalWalletValue: { $sum: '$walletValue' },
+          averageWalletValue: { $avg: '$walletValue' }
         }
       }
     ]);
@@ -117,7 +120,9 @@ router.get('/stats', async (req, res) => {
         totalGasSpent: 0,
         averageGasSpent: 0,
         totalTrades: 0,
-        averageTrades: 0
+        averageTrades: 0,
+        totalWalletValue: 0,
+        averageWalletValue: 0
       });
     }
     

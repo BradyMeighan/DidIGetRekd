@@ -270,9 +270,13 @@ async function analyzeWallet(address, options = {}) {
     // Generate a roast based on the stats
     const roast = await generateRoast(address, stats);
     
+    // Generate achievements
+    const achievements = generateAchievements(walletData);
+    
     return {
       stats,
-      roast
+      roast,
+      achievements
     };
   } catch (error) {
     console.error(`Error analyzing wallet ${address}:`, error);
@@ -896,154 +900,214 @@ function calculateScore(stats) {
 }
 
 /**
- * Generate achievements based on wallet stats
+ * Generate achievements based on wallet data
+ * @param {Object} walletData - The wallet data
+ * @returns {Array} List of achievements
  */
-function generateAchievements({ 
-  score, 
-  totalTrades, 
-  successRate, 
-  totalGasSpent, 
-  nativeBalance,
-  accountAgeDays,
-  txPerDay,
-  swapCount,
-  transfersCount,
-  mintCount,
-  tokens
-}) {
+function generateAchievements(walletData) {
   const achievements = [];
   
-  // Score-based achievements
+  // Get the wallet age if we have transaction history
+  let walletAge = 0;
+  let activityGap = 0;
+  let consecutiveDays = 0;
+  
+  if (walletData.signatures && walletData.signatures.length > 0) {
+    try {
+      // Sort signatures by block time (oldest first)
+      const sortedSignatures = [...walletData.signatures].sort((a, b) => {
+        return a.blockTime - b.blockTime;
+      });
+      
+      // Calculate wallet age in days
+      const firstTxTime = new Date(sortedSignatures[0].blockTime * 1000);
+      const now = new Date();
+      walletAge = Math.floor((now - firstTxTime) / (1000 * 60 * 60 * 24));
+      
+      // Check for activity gaps
+      if (sortedSignatures.length > 1) {
+        let maxGap = 0;
+        for (let i = 1; i < sortedSignatures.length; i++) {
+          const gap = sortedSignatures[i].blockTime - sortedSignatures[i-1].blockTime;
+          const gapDays = Math.floor(gap / (60 * 60 * 24));
+          if (gapDays > maxGap) {
+            maxGap = gapDays;
+          }
+        }
+        activityGap = maxGap;
+        
+        // Check for consecutive days of activity
+        const txDates = sortedSignatures.map(sig => {
+          const date = new Date(sig.blockTime * 1000);
+          return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+        });
+        
+        // Count consecutive days
+        const uniqueDates = [...new Set(txDates)].sort();
+        let maxConsecutive = 1;
+        let current = 1;
+        
+        for (let i = 1; i < uniqueDates.length; i++) {
+          const prevDate = new Date(uniqueDates[i-1]);
+          const currDate = new Date(uniqueDates[i]);
+          
+          const diffTime = Math.abs(currDate - prevDate);
+          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+          
+          if (diffDays === 1) {
+            current++;
+            maxConsecutive = Math.max(maxConsecutive, current);
+          } else {
+            current = 1;
+          }
+        }
+        
+        consecutiveDays = maxConsecutive;
+      }
+    } catch (error) {
+      console.error('Error calculating wallet age:', error);
+    }
+  }
+  
+  // Account Age achievements
+  if (walletAge > 730) { // 2 years
+    achievements.push({ 
+      title: 'OG Wallet 🧓', 
+      description: 'Wallet age is over 2 years old'
+    });
+  } else if (walletAge < 30) {
+    achievements.push({ 
+      title: 'Fresh Wallet 👶', 
+      description: 'Wallet created in the last 30 days'
+    });
+  }
+  
+  // Activity achievements
+  if (activityGap > 180) { // 6 months
+    achievements.push({ 
+      title: 'Hibernator 💤', 
+      description: 'No transactions for 6+ months at some point'
+    });
+  }
+  
+  if (consecutiveDays >= 7) {
+    achievements.push({ 
+      title: 'Non-Stop 🔄', 
+      description: `Transactions ${consecutiveDays} days in a row`
+    });
+  }
+  
+  // Transaction count achievements
+  const txCount = walletData.totalTrades || 0;
+  
+  if (txCount > 100) {
+    achievements.push({ 
+      title: 'Degenerate Trader 🎰', 
+      description: `Made ${txCount} trades in total`
+    });
+  } else if (txCount > 50) {
+    achievements.push({ 
+      title: 'Active Trader 📊', 
+      description: `Made ${txCount} trades in total`
+    });
+  }
+  
+  // Gas fees achievements
+  const gasSpent = walletData.gasSpent || 0;
+  
+  if (gasSpent > 1) {
+    achievements.push({ 
+      title: 'Gas Guzzler 🔥', 
+      description: `Spent ${gasSpent.toFixed(2)} SOL on fees alone`
+    });
+  }
+  
+  if (txCount > 0 && gasSpent / txCount < 0.0001) {
+    achievements.push({ 
+      title: 'Penny Pincher 💰', 
+      description: 'Averaged less than 0.0001 SOL per transaction'
+    });
+  }
+  
+  // Wallet value achievements
+  const walletValue = parseFloat(walletData.walletValue || 0);
+  
+  if (walletValue > 10000) {
+    achievements.push({ 
+      title: 'Whale Alert 🐋', 
+      description: 'Wallet value exceeds $10,000'
+    });
+  } else if (walletValue < 100) {
+    achievements.push({ 
+      title: 'Shrimp 🦐', 
+      description: 'Wallet value under $100'
+    });
+  }
+  
+  // Token variety achievements
+  const tokenCount = walletData.tokens ? walletData.tokens.length : 0;
+  
+  if (tokenCount > 10) {
+    achievements.push({ 
+      title: 'Token Collector 🪙', 
+      description: `Holds ${tokenCount} different tokens`
+    });
+  }
+  
+  // Check for meme tokens
+  const memeTokens = ['BONK', 'SLERF', 'WIF', 'SNEK'];
+  const hasMultipleMemeTokens = walletData.tokens ? 
+    walletData.tokens.filter(token => 
+      memeTokens.some(meme => 
+        token.name && token.name.toUpperCase().includes(meme)
+      )
+    ).length >= 2 : false;
+  
+  if (hasMultipleMemeTokens) {
+    achievements.push({ 
+      title: 'Meme Lord 👑', 
+      description: 'Holds multiple meme tokens'
+    });
+  }
+  
+  // Portfolio balance achievements
+  const solBalance = walletData.tokens ? 
+    walletData.tokens.find(t => t.name === 'SOL')?.amount || 0 : 0;
+  
+  const hasStablecoins = walletData.tokens ? 
+    walletData.tokens.some(token => 
+      token.name && ['USDC', 'USDT', 'DAI', 'TUSD'].includes(token.name.toUpperCase())
+    ) : false;
+  
+  if (hasStablecoins) {
+    achievements.push({ 
+      title: 'Stablecoin Lover 💲', 
+      description: 'Holds stablecoins as part of portfolio'
+    });
+  }
+  
+  // Trading pattern achievements based on wallet score
+  const score = walletData.score || 50;
+  
   if (score < 30) {
     achievements.push({ 
       title: 'Rug Victim 🫠', 
-      description: 'Wallet shows signs of unsuccessful transactions.' 
+      description: 'Bought high and sold low. Classic.'
     });
   } else if (score < 60) {
     achievements.push({ 
       title: 'Paper Hands 🧻', 
-      description: 'A cautious trader or still learning the ropes.' 
+      description: 'Selling at the first sign of trouble'
     });
   } else if (score < 90) {
     achievements.push({ 
       title: 'Diamond Hands 💎🙌', 
-      description: 'Holds through thick and thin.' 
+      description: 'HODL is your middle name'
     });
   } else {
     achievements.push({ 
       title: 'Giga Chad Ape 🦍', 
-      description: 'An experienced trader with high success rates.' 
-    });
-  }
-  
-  // Balance-based achievements
-  if (nativeBalance > 100) {
-    achievements.push({ 
-      title: 'SOL Whale 🐳', 
-      description: `Holding ${nativeBalance.toFixed(2)} SOL worth $${(nativeBalance * 100).toFixed(2)}.` 
-    });
-  } else if (nativeBalance > 10) {
-    achievements.push({ 
-      title: 'SOL Stacker 💰', 
-      description: `Holding ${nativeBalance.toFixed(2)} SOL. Not too shabby!` 
-    });
-  } else if (nativeBalance < 0.1 && totalTrades > 10) {
-    achievements.push({ 
-      title: 'Dust Collector 💨', 
-      description: `Your wallet is running on fumes with only ${nativeBalance.toFixed(4)} SOL left.` 
-    });
-  }
-  
-  // Activity-based achievements
-  if (totalGasSpent > 1) {
-    achievements.push({ 
-      title: 'Gas Guzzler 🛢️', 
-      description: `Spent ${totalGasSpent.toFixed(4)} SOL on gas fees.` 
-    });
-  }
-  
-  if (totalTrades > 100) {
-    achievements.push({ 
-      title: 'Trade Addict 🎰', 
-      description: `Made ${totalTrades} transactions on Solana.` 
-    });
-  } else if (totalTrades > 50) {
-    achievements.push({ 
-      title: 'Active Trader 📈', 
-      description: `Made ${totalTrades} transactions on Solana.` 
-    });
-  }
-  
-  if (successRate < 80) {
-    achievements.push({
-      title: 'Transaction Fumbler 🤦',
-      description: `${100-successRate}% of your transactions failed. Maybe check your settings?`
-    });
-  } else if (successRate > 98 && totalTrades > 20) {
-    achievements.push({
-      title: 'Transaction Master ✅',
-      description: `${successRate}% success rate across ${totalTrades} transactions. Impressive!`
-    });
-  }
-  
-  // Account age achievements
-  if (accountAgeDays > 365) {
-    achievements.push({
-      title: 'Solana OG 👴',
-      description: `Your wallet has been active for ${Math.floor(accountAgeDays / 365)} year(s) and ${accountAgeDays % 365} days.`
-    });
-  } else if (accountAgeDays > 30) {
-    achievements.push({
-      title: 'Solana Citizen 🏙️',
-      description: `Your wallet has been active for ${accountAgeDays} days.`
-    });
-  } else if (accountAgeDays < 7) {
-    achievements.push({
-      title: 'Solana Newbie 🐣',
-      description: 'Welcome to Solana! Your wallet is less than a week old.'
-    });
-  }
-  
-  // Activity frequency achievements
-  if (txPerDay > 5 && accountAgeDays > 14) {
-    achievements.push({
-      title: 'Hyperactive Trader 🚀',
-      description: `Averaging ${txPerDay.toFixed(1)} transactions per day. Do you ever sleep?`
-    });
-  }
-  
-  // Transaction type achievements
-  if (swapCount > 20) {
-    achievements.push({
-      title: 'Swap King 👑',
-      description: `Made ${swapCount} token swaps. Always chasing the next gem?`
-    });
-  }
-  
-  if (transfersCount > 30) {
-    achievements.push({
-      title: 'Transfer Wizard 🧙',
-      description: `Made ${transfersCount} transfers. Popular wallet!`
-    });
-  }
-  
-  if (mintCount > 5) {
-    achievements.push({
-      title: 'NFT Collector 🖼️',
-      description: `Minted ${mintCount} NFTs or tokens. Web3 creativity at its finest!`
-    });
-  }
-  
-  // Token diversity achievements
-  if (tokens > 5) {
-    achievements.push({
-      title: 'Token Diversifier 🌈',
-      description: `Holding ${tokens} different tokens. Spreading those bets!`
-    });
-  } else if (tokens === 1 && totalTrades > 10) {
-    achievements.push({
-      title: 'SOL Maximalist ☀️',
-      description: 'Only holding SOL despite all those transactions. Loyalty!'
+      description: 'The wolf of Solana Street'
     });
   }
   

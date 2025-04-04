@@ -23,6 +23,10 @@ const WalletSchema = new mongoose.Schema({
     type: Number,
     required: true
   },
+  walletValue: {
+    type: Number,
+    default: 0
+  },
   achievements: [{
     title: String,
     description: String
@@ -46,6 +50,8 @@ const WalletSchema = new mongoose.Schema({
 
 // Index for efficient leaderboard queries
 WalletSchema.index({ score: -1 });
-WalletSchema.index({ pnl: -1 });
+WalletSchema.index({ walletValue: -1 });
+WalletSchema.index({ totalTrades: -1 });
+WalletSchema.index({ gasSpent: -1 });
 
 module.exports = mongoose.model('Wallet', WalletSchema); 
