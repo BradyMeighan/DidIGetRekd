@@ -18,7 +18,21 @@ app.use('/api/leaderboard', leaderboardRoutes);
 
 // Health check endpoint - respond immediately
 app.get('/health', (req, res) => {
-  res.status(200).json({ status: 'ok' });
+  const mongoUri = process.env.MONGODB_URI || process.env.MONGO_URL;
+  
+  // Check environment variables
+  const envStatus = {
+    MONGODB_URI: mongoUri ? 'Set' : 'Missing',
+    HELIUS_API_KEY: process.env.HELIUS_API_KEY ? 'Set' : 'Missing',
+    OPENAI_API_KEY: process.env.OPENAI_API_KEY ? 'Set' : 'Missing',
+    PORT: process.env.PORT || 3001
+  };
+  
+  res.status(200).json({ 
+    status: 'ok',
+    environment: envStatus,
+    timestamp: new Date().toISOString()
+  });
 });
 
 // Log environment variables (without sensitive data)
