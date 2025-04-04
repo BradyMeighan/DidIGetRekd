@@ -258,35 +258,73 @@ router.get('/helius-test/:address', async (req, res) => {
       return res.status(400).json({ error: 'HELIUS_API_KEY not set in environment variables' });
     }
     
-    // 1. First test: get balances
+    const results = {};
+    
+    // 1. Get balances
     const balanceUrl = `https://api.helius.xyz/v0/addresses/${address}/balances?api-key=${heliusApiKey}`;
     console.log('Calling Helius balances endpoint:', balanceUrl);
     const balanceResponse = await axios.get(balanceUrl);
+    results.balance = balanceResponse.data;
     
-    // 2. Second test: get transactions
-    const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${heliusApiKey}`;
+    // 2. Get transactions (try with a larger limit)
+    const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${heliusApiKey}&limit=20`;
     console.log('Calling Helius transactions endpoint:', txUrl);
     const txResponse = await axios.get(txUrl);
+    results.transactions = {
+      count: txResponse.data.transactions?.length || 0,
+      sample: txResponse.data.transactions?.slice(0, 2) || []
+    };
     
-    // 3. Third test: try an RPC call
+    // 3. Get signatures (often more reliable than transactions endpoint)
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
-    console.log('Calling Helius RPC endpoint with getBalance:', rpcUrl);
-    const rpcResponse = await axios.post(rpcUrl, {
+    console.log('Calling getSignaturesForAddress RPC method');
+    const signaturesResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "getSignaturesForAddress",
+      params: [address, { limit: 10 }]
+    });
+    results.signatures = signaturesResponse.data;
+    
+    // 4. Get token accounts (more detailed token data)
+    console.log('Calling getTokenAccountsByOwner RPC method');
+    const tokenAccountsResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "getTokenAccountsByOwner",
+      params: [
+        address,
+        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+        { encoding: "jsonParsed" }
+      ]
+    });
+    results.tokenAccounts = tokenAccountsResponse.data;
+    
+    // 5. Get basic balance
+    console.log('Calling getBalance RPC method');
+    const balanceRpcResponse = await axios.post(rpcUrl, {
       jsonrpc: "2.0",
       id: 1,
       method: "getBalance",
       params: [address]
     });
+    results.rpcBalance = balanceRpcResponse.data;
     
-    // Return all test results
-    res.json({
-      balance: balanceResponse.data,
-      transactions: {
-        count: txResponse.data.transactions?.length || 0,
-        sample: txResponse.data.transactions?.slice(0, 2) || []
-      },
-      rpc: rpcResponse.data
-    });
+    // 6. If we have signatures, try to get detailed transaction data for one of them
+    if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
+      const firstSig = signaturesResponse.data.result[0].signature;
+      console.log(`Getting transaction details for signature: ${firstSig}`);
+      const txDetailResponse = await axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "getTransaction",
+        params: [firstSig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
+      });
+      results.transactionDetail = txDetailResponse.data;
+    }
+    
+    // Return all results
+    res.json(results);
   } catch (error) {
     console.error('Error testing Helius API:', error.message);
     res.status(500).json({ 
