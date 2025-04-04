@@ -175,72 +175,135 @@ async function fetchWalletData(address) {
       console.log('No token accounts found or error in response:', tokenResponse.data);
     }
     
-    // 3. Get transaction signatures (more reliable than transactions endpoint)
-    console.log('Fetching transaction signatures...');
-    const signaturesResponse = await axios.post(rpcUrl, {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "getSignaturesForAddress",
-      params: [address, { limit: 50 }]
-    });
+    // 3. PRIORITIZE: Get transaction signatures with getSignaturesForAddress
+    // (this worked in the test when other methods failed)
+    console.log('Fetching transaction signatures with getSignaturesForAddress...');
+    let signaturesFound = false;
     
-    if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
-      walletData.signatures = signaturesResponse.data.result;
-      console.log(`Found ${walletData.signatures.length} transaction signatures`);
+    try {
+      const signaturesResponse = await axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 3,
+        method: "getSignaturesForAddress",
+        params: [address, { limit: 50 }]
+      });
       
-      // Get full transaction details for the 10 most recent transactions
-      const transactionsToFetch = walletData.signatures.slice(0, 10);
-      console.log(`Fetching details for ${transactionsToFetch.length} recent transactions...`);
-      
-      walletData.transactions = [];
-      
-      for (const sigData of transactionsToFetch) {
-        try {
-          const txResponse = await axios.post(rpcUrl, {
-            jsonrpc: "2.0",
-            id: 4,
-            method: "getTransaction",
-            params: [
-              sigData.signature,
-              { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
-            ]
-          });
-          
-          if (txResponse.data?.result) {
-            // Add more easily accessible metadata
-            const tx = txResponse.data.result;
-            tx.blockTime = tx.blockTime || sigData.blockTime;
-            tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
-            tx.successful = sigData.err === null;
-            tx.fee = tx.meta?.fee || 0;
+      if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
+        walletData.signatures = signaturesResponse.data.result;
+        signaturesFound = true;
+        console.log(`Found ${walletData.signatures.length} transaction signatures`);
+        
+        // Get full transaction details for the 10 most recent transactions
+        const transactionsToFetch = walletData.signatures.slice(0, 10);
+        console.log(`Fetching details for ${transactionsToFetch.length} recent transactions...`);
+        
+        walletData.transactions = [];
+        
+        for (const sigData of transactionsToFetch) {
+          try {
+            const txResponse = await axios.post(rpcUrl, {
+              jsonrpc: "2.0",
+              id: 4,
+              method: "getTransaction",
+              params: [
+                sigData.signature,
+                { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+              ]
+            });
             
-            walletData.transactions.push(tx);
+            if (txResponse.data?.result) {
+              // Add more easily accessible metadata
+              const tx = txResponse.data.result;
+              tx.blockTime = tx.blockTime || sigData.blockTime;
+              tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
+              tx.successful = sigData.err === null;
+              tx.fee = tx.meta?.fee || 0;
+              tx.signature = sigData.signature;
+              
+              // Extract transaction type and description from instructions
+              if (tx.transaction?.message?.instructions) {
+                const instructions = tx.transaction.message.instructions;
+                let description = "";
+                
+                // Look for common instruction patterns
+                for (const instruction of instructions) {
+                  if (instruction.program === 'system') {
+                    if (instruction.parsed?.type === 'transfer') {
+                      const amount = instruction.parsed.info.lamports / 1000000000;
+                      const source = instruction.parsed.info.source;
+                      const destination = instruction.parsed.info.destination;
+                      const isReceiving = destination === address;
+                      
+                      description = isReceiving 
+                        ? `Received ${amount.toFixed(6)} SOL from ${source.slice(0, 4)}...`
+                        : `Sent ${amount.toFixed(6)} SOL to ${destination.slice(0, 4)}...`;
+                    }
+                  }
+                }
+                
+                // Set a default description if we couldn't determine one
+                if (!description) {
+                  description = tx.meta?.innerInstructions?.length > 0
+                    ? "Complex Transaction"
+                    : "SOL Transfer";
+                }
+                
+                tx.description = description;
+              }
+              
+              walletData.transactions.push(tx);
+            }
+          } catch (err) {
+            console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
           }
-        } catch (err) {
-          console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
         }
+        
+        console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
+      } else {
+        console.log('No transaction signatures found.');
       }
-      
-      console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
-    } else {
-      console.log('No transaction signatures found. Trying alternative endpoint...');
-      
-      // Log the signature response for debugging
-      console.log('Signature response:', JSON.stringify(signaturesResponse.data || {}, null, 2));
+    } catch (error) {
+      console.error('Error fetching transaction signatures:', error.message);
     }
     
-    // 4. If we couldn't get transaction details via RPC, try Helius transactions endpoint
+    // 4. FALLBACK: If we didn't find signatures, try getConfirmedSignaturesForAddress2
+    if (!signaturesFound) {
+      try {
+        console.log('Trying alternative getConfirmedSignaturesForAddress2...');
+        const oldSigResponse = await axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 5,
+          method: "getConfirmedSignaturesForAddress2",
+          params: [address, { limit: 50 }]
+        });
+        
+        if (oldSigResponse.data?.result && oldSigResponse.data.result.length > 0) {
+          walletData.signatures = oldSigResponse.data.result;
+          signaturesFound = true;
+          console.log(`Found ${walletData.signatures.length} signatures via fallback method`);
+        } else {
+          console.log('No signatures found via fallback method');
+        }
+      } catch (err) {
+        console.error('Error with fallback signature method:', err.message);
+      }
+    }
+    
+    // 5. LAST RESORT: If we still don't have transactions, try Helius transactions endpoint
     if (!walletData.transactions || walletData.transactions.length === 0) {
-      console.log('No transactions from RPC, trying Helius transactions endpoint...');
-      const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=20`;
-      const txResponse = await axios.get(txUrl);
-      
-      if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
-        walletData.transactions = txResponse.data.transactions;
-        console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
-      } else {
-        console.log('No transactions found from Helius transactions endpoint either.');
-        console.log('Helius transactions response:', JSON.stringify(txResponse.data || {}, null, 2));
+      console.log('No transactions from RPC methods, trying Helius transactions endpoint...');
+      try {
+        const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=20`;
+        const txResponse = await axios.get(txUrl);
+        
+        if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
+          walletData.transactions = txResponse.data.transactions;
+          console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
+        } else {
+          console.log('No transactions found from Helius transactions endpoint either.');
+        }
+      } catch (err) {
+        console.error('Error with Helius transactions endpoint:', err.message);
       }
     }
     
@@ -442,6 +505,8 @@ function calculateWalletStats(walletData) {
  * Generate transaction history for the chart
  */
 function generateTxHistory(signatures, transactions) {
+  console.log(`Generating transaction history from ${signatures?.length || 0} signatures and ${transactions?.length || 0} transactions`);
+  
   // Create a map for the last 30 days
   const txHistory = [];
   const now = new Date();
@@ -459,13 +524,20 @@ function generateTxHistory(signatures, transactions) {
     });
   }
   
-  // Use signatures first (more reliable)
+  // Use signatures first (most reliable)
   if (signatures && signatures.length > 0) {
+    // Log a sample signature to understand format
+    if (signatures.length > 0) {
+      console.log('Sample signature for history generation:', JSON.stringify(signatures[0], null, 2));
+    }
+    
     signatures.forEach(sig => {
       if (!sig.blockTime) return;
       
       const txDate = new Date(sig.blockTime * 1000);
       if (isNaN(txDate.getTime())) return;
+      
+      console.log(`Processing signature from date: ${txDate.toISOString()}`);
       
       // Only count transactions from the last 30 days
       const diffTime = now - txDate;
@@ -487,8 +559,18 @@ function generateTxHistory(signatures, transactions) {
   } 
   // Fallback to transactions if available
   else if (transactions && transactions.length > 0) {
+    // Log a sample transaction to understand format
+    if (transactions.length > 0) {
+      console.log('Sample transaction for history generation:', 
+                  transactions[0].blockTime || transactions[0].timestamp);
+    }
+    
     transactions.forEach(tx => {
-      const timestamp = tx.timestamp || (tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null);
+      // Try to get timestamp from blockTime first (RPC format) or timestamp (Helius format)
+      const timestamp = tx.blockTime 
+        ? new Date(tx.blockTime * 1000).toISOString() 
+        : tx.timestamp;
+      
       if (!timestamp) return;
       
       const txDate = new Date(timestamp);
@@ -520,6 +602,7 @@ function generateTxHistory(signatures, transactions) {
     day.value = Math.max(-3, Math.min(3, day.value));
   });
   
+  console.log(`Generated transaction history with data: ${JSON.stringify(txHistory.filter(d => d.transactions > 0))}`);
   return txHistory;
 }
 
