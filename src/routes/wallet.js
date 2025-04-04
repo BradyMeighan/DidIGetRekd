@@ -1,120 +1,89 @@
 const express = require('express');
-const Wallet = require('../models/Wallet');
-const heliusService = require('../services/helius');
-const openaiService = require('../services/openai');
-
 const router = express.Router();
+const walletService = require('../services/walletService');
 
 /**
- * Validate Solana wallet address format
- */
-function isValidSolanaAddress(address) {
-  // Basic validation - Solana addresses are 32-44 characters long
-  return typeof address === 'string' && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
-}
-
-/**
- * GET /api/wallet/:address
- * Get wallet data, analyze it, and store in DB
+ * @route GET /api/wallet/:address
+ * @desc Get wallet statistics and generate roast
  */
 router.get('/:address', async (req, res) => {
   try {
     const { address } = req.params;
-    
-    // Validate wallet address
-    if (!isValidSolanaAddress(address)) {
-      return res.status(400).json({ error: 'Invalid Solana wallet address' });
-    }
-    
-    // Check if we already have this wallet in our database
-    let wallet = await Wallet.findOne({ address });
-    
-    // If not in database or data is older than 24 hours, fetch fresh data
-    if (!wallet || Date.now() - wallet.updatedAt > 24 * 60 * 60 * 1000) {
-      // Get stats from Helius API
-      const walletStats = await heliusService.calculateWalletStats(address);
-      
-      // Generate a roast using OpenAI
-      const roast = await openaiService.generateRoast(walletStats);
-      
-      // Prepare wallet data
-      const walletData = {
-        address,
-        score: walletStats.score,
-        pnl: walletStats.pnl,
-        totalTrades: walletStats.totalTrades,
-        gasSpent: walletStats.gasSpent,
-        achievements: walletStats.achievements,
-        roasts: [{ text: roast }],
-        updatedAt: Date.now()
-      };
-      
-      if (wallet) {
-        // Update existing wallet
-        wallet = await Wallet.findOneAndUpdate(
-          { address }, 
-          { 
-            ...walletData,
-            $push: { roasts: { text: roast } }
-          }, 
-          { new: true }
-        );
-      } else {
-        // Create new wallet entry
-        wallet = await Wallet.create(walletData);
-      }
-    }
-    
-    // Return wallet data with the latest roast
-    res.json({
-      address: wallet.address,
-      score: wallet.score,
-      pnl: wallet.pnl,
-      totalTrades: wallet.totalTrades,
-      gasSpent: wallet.gasSpent,
-      achievements: wallet.achievements,
-      roast: wallet.roasts[wallet.roasts.length - 1].text
-    });
+    const result = await walletService.analyzeWallet(address);
+    res.json(result);
   } catch (error) {
     console.error('Error processing wallet request:', error);
-    res.status(500).json({ error: 'Failed to process wallet data', details: error.message });
+    res.status(500).json({ error: error.message });
   }
 });
 
 /**
- * POST /api/wallet/:address/roast
- * Generate a new roast for a wallet
+ * @route POST /api/wallet/:address
+ * @desc Analyze wallet with options
  */
-router.post('/:address/roast', async (req, res) => {
+router.post('/:address', async (req, res) => {
   try {
     const { address } = req.params;
+    const options = req.body || {};
     
-    // Find wallet in database
-    const wallet = await Wallet.findOne({ address });
+    const result = await walletService.analyzeWallet(address, options);
+    res.json(result);
+  } catch (error) {
+    console.error('Error processing wallet analysis request:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+/**
+ * @route POST /api/wallet/roast
+ * @desc Generate a roast based on wallet stats
+ */
+router.post('/roast', async (req, res) => {
+  try {
+    const { address, stats } = req.body;
     
-    if (!wallet) {
-      return res.status(404).json({ error: 'Wallet not found' });
+    if (!address || !stats) {
+      return res.status(400).json({ error: 'Address and stats are required' });
     }
     
-    // Generate a new roast
-    const walletStats = {
-      score: wallet.score,
-      pnl: wallet.pnl,
-      totalTrades: wallet.totalTrades,
-      gasSpent: wallet.gasSpent,
-      achievements: wallet.achievements
-    };
+    // Generate roast using OpenAI
+    const OpenAI = require('openai');
+    const openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
     
-    const roast = await openaiService.generateRoast(walletStats);
+    const prompt = `Generate a funny, sarcastic roast of this Solana wallet based on its statistics:
+    - Wallet: ${address.slice(0, 6)}...${address.slice(-4)}
+    - PnL: ${stats.pnl > 0 ? '+' : ''}${stats.pnl} SOL
+    - Total Trades: ${stats.totalTrades || 0}
+    - Gas Spent: ${stats.gasSpent || 0} SOL
     
-    // Add new roast to wallet
-    wallet.roasts.push({ text: roast });
-    await wallet.save();
+    The roast should be funny but not too mean, about 2-3 sentences, and include specific details from the wallet stats.`;
     
+    const response = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are a hilarious crypto roast generator that creates short, witty, sarcastic roasts based on wallet statistics." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 150,
+      temperature: 0.7,
+    });
+    
+    const roast = response.choices[0].message.content.trim();
     res.json({ roast });
   } catch (error) {
-    console.error('Error generating new roast:', error);
-    res.status(500).json({ error: 'Failed to generate roast', details: error.message });
+    console.error('Error generating roast:', error);
+    // Provide a fallback roast
+    const fallbackRoasts = [
+      "This wallet is so basic it probably thinks gas fees are for a car.",
+      "I've seen more profitable strategies from a toddler playing with Monopoly money.",
+      "Congrats on those trades! Maybe next time try opening your eyes while clicking.",
+      "Your wallet is like a leaky faucet, but instead of water, it's SOL.",
+      "This wallet screams 'I make financial decisions based on TikTok videos.'"
+    ];
+    const randomRoast = fallbackRoasts[Math.floor(Math.random() * fallbackRoasts.length)];
+    res.json({ roast: randomRoast });
   }
 });
 
