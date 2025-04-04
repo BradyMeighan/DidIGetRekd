@@ -31,6 +31,10 @@ const WalletSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  solPrice: {
+    type: Number,
+    default: 0
+  },
   lastRoast: {
     type: String,
     default: ''

@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     const leaderboard = await Wallet.find({})
       .sort(sortObj)
       .limit(limit)
-      .select('address score totalTrades gasSpent pnl walletValue nativeBalance lastRoast lastSeen createdAt')
+      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen createdAt')
       .lean();
       
     // Process wallets for response and ensure numeric fields are numbers
@@ -41,6 +41,7 @@ router.get('/', async (req, res) => {
         pnl: Number(wallet.pnl) || 0,
         walletValue: Number(wallet.walletValue) || 0,
         nativeBalance: Number(wallet.nativeBalance) || 0,
+        solPrice: Number(wallet.solPrice) || 100,
         lastRoast: wallet.lastRoast,
         lastSeen: wallet.lastSeen
       };
@@ -138,7 +139,7 @@ router.get('/stats', async (req, res) => {
 router.post('/:address/leaderboard', async (req, res) => {
   try {
     const { address } = req.params;
-    const { score, totalTrades, gasSpent, pnl, walletValue, lastRoast } = req.body;
+    const { score, totalTrades, gasSpent, pnl, walletValue, nativeBalance, lastRoast, solPrice } = req.body;
     
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
@@ -152,6 +153,8 @@ router.post('/:address/leaderboard', async (req, res) => {
       gasSpent: gasSpent || 0,
       pnl: pnl || 0,
       walletValue: walletValue || 0,
+      nativeBalance: nativeBalance || 0,
+      solPrice: solPrice || 0,
       lastSeen: new Date()
     };
     
@@ -181,6 +184,7 @@ router.post('/:address/leaderboard', async (req, res) => {
         pnl: result.pnl,
         walletValue: result.walletValue,
         nativeBalance: result.nativeBalance,
+        solPrice: result.solPrice,
         lastRoast: result.lastRoast,
         createdAt: result.createdAt,
         lastSeen: result.lastSeen
