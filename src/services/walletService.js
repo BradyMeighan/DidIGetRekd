@@ -1110,6 +1110,27 @@ function generateAchievements(walletData) {
 
     console.log(`Achievement wallet value calculation: ${nativeBalance} SOL × $${solPrice} = $${walletValueUsd.toFixed(2)}`);
 
+    // Only give Penny Pincher achievement if wallet has very low SOL balance
+    // This takes precedence over the gas-based check above
+    if (nativeBalance > 0 && nativeBalance < 0.1) {
+      // Replace any existing Penny Pincher achievement
+      const pennyPincherIndex = achievements.findIndex(a => a.title === 'Penny Pincher 💰');
+      if (pennyPincherIndex >= 0) {
+        achievements.splice(pennyPincherIndex, 1);
+      }
+      
+      achievements.push({ 
+        title: 'Penny Pincher 💰', 
+        description: `Wallet balance is only ${nativeBalance.toFixed(4)} SOL ($${walletValueUsd.toFixed(2)})`
+      });
+    } else if (nativeBalance >= 1) {
+      // Remove Penny Pincher achievement if wallet has significant SOL
+      const pennyPincherIndex = achievements.findIndex(a => a.title === 'Penny Pincher 💰');
+      if (pennyPincherIndex >= 0) {
+        achievements.splice(pennyPincherIndex, 1);
+      }
+    }
+
     if (walletValueUsd > 10000) {
       achievements.push({ 
         title: 'Whale Alert 🐋', 
@@ -1326,13 +1347,13 @@ async function generateRoast(walletData, additionalStats = {}) {
     const prompt = `ROAST THIS WALLET WITH STREET/HOOD SLANG:
 
 WALLET DATA:
-- SOL Balance: ${nativeBalance.toFixed(4)} SOL (worth $${walletValueUsd.toFixed(2)})
+- SOL Balance: ${Math.floor(nativeBalance)} SOL (worth $${walletValueUsd.toFixed(2)})
 - Total Transactions: ${totalTrades}
 
 KEEP IT 100 WITH THESE INSTRUCTIONS:
 - Talk like you from the hood - use slang like "no cap", "bussin", "fr fr", "on god", "drippy", etc.
 - Use ACTUAL wallet stats in your roast - don't make up fake numbers
-- This wallet got ${nativeBalance.toFixed(4)} SOL worth $${walletValueUsd.toFixed(2)}
+- This wallet got ${Math.floor(nativeBalance)} SOL worth $${walletValueUsd.toFixed(2)}
 - This wallet made ${totalTrades} transactions
 - If they broke, flame them for it
 - If they got paper hands or panic sold, clown them
