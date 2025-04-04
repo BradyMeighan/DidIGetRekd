@@ -108,4 +108,42 @@ router.post('/visitors/reset', async (req, res) => {
   }
 });
 
+/**
+ * POST /api/visitors/decrement
+ * Decrements the visitor count
+ */
+router.post('/visitors/decrement', async (req, res) => {
+  try {
+    // Find the visitor count document
+    let visitorCount = await VisitorCount.findOne();
+    
+    if (!visitorCount) {
+      // Shouldn't happen, but we'll handle it just in case
+      visitorCount = new VisitorCount({ count: 0 });
+      await visitorCount.save();
+      return res.json({ count: 0 });
+    }
+    
+    // Check if already at 0 to prevent negative values
+    if (visitorCount.count <= 0) {
+      return res.json({ count: 0 });
+    }
+    
+    // Decrement the count and update lastUpdate
+    visitorCount.count -= 1;
+    visitorCount.lastUpdate = Date.now();
+    await visitorCount.save();
+    
+    // Update the cache
+    if (cachedCount !== null) {
+      cachedCount = visitorCount.count;
+    }
+    
+    return res.json({ count: visitorCount.count });
+  } catch (error) {
+    console.error('Error decrementing visitor count:', error);
+    return res.status(500).json({ error: 'Failed to decrement visitor count' });
+  }
+});
+
 module.exports = router; 

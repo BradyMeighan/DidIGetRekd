@@ -74,10 +74,36 @@ async function calculateWalletStats(address) {
     // Score calculation based on various factors
     const diversificationScore = Math.min(portfolio.tokens.length * 5, 20);
     const activityScore = Math.min(transactions.length / 5, 30);
-    const valueScore = Math.min(totalBalanceInUsd / 100, 30);
+    
+    // More robust value score with exponential scaling for higher values
+    let valueScore = 0;
+    
+    // Penalize wallets with less than $100 value
+    if (totalBalanceInUsd < 100) {
+      valueScore = Math.max(5, Math.floor(totalBalanceInUsd / 20));
+    } 
+    // Normal scaling for moderate wallets ($100-$1000)
+    else if (totalBalanceInUsd < 1000) {
+      valueScore = 15 + Math.floor((totalBalanceInUsd - 100) / 60);
+    }
+    // Higher scaling for valuable wallets ($1000-$10000)
+    else if (totalBalanceInUsd < 10000) {
+      valueScore = 30 + Math.floor((totalBalanceInUsd - 1000) / 500);
+    }
+    // Premium scaling for whale wallets (>$10000)
+    else {
+      valueScore = 45 + Math.min(Math.floor((totalBalanceInUsd - 10000) / 5000), 15);
+    }
+    
+    // Cap the value score at 60
+    valueScore = Math.min(valueScore, 60);
+    
     const holdingPeriodScore = 20; // Placeholder - would need more data
     
     const score = Math.floor(diversificationScore + activityScore + valueScore + holdingPeriodScore);
+    
+    // Cap the final score at 100
+    const finalScore = Math.min(score, 100);
     
     // Calculate achievements
     const achievements = [];
@@ -105,7 +131,7 @@ async function calculateWalletStats(address) {
     
     return {
       address,
-      score,
+      score: finalScore,
       pnl: totalBalanceInUsd, // Simplified - should be based on buy/sell history
       totalTrades: transactions.length,
       gasSpent,
