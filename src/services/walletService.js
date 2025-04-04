@@ -1045,18 +1045,21 @@ function generateAchievements(walletData) {
       });
     }
     
-    // Wallet value achievements
-    const walletValue = parseFloat(walletData.walletValue || 0);
-    
-    if (walletValue > 10000) {
+    // Wallet value achievements in USD
+    const walletValueUsd = parseFloat(walletData.walletValue || 0);
+    const walletInfo = walletData.tokens ? `(${walletData.tokens.length} tokens found)` : '(no tokens found)';
+    console.log(`Wallet value for achievements: $${walletValueUsd} ${walletInfo}`);
+    console.log(`Wallet check: > 10000: ${walletValueUsd > 10000}, < 100: ${walletValueUsd < 100}, > 0: ${walletValueUsd > 0}`);
+
+    if (walletValueUsd > 10000) {
       achievements.push({ 
         title: 'Whale Alert 🐋', 
-        description: 'Wallet value exceeds $10,000'
+        description: `Wallet value exceeds $10,000 (Current: $${walletValueUsd.toFixed(2)})`
       });
-    } else if (walletValue < 100) {
+    } else if (walletValueUsd < 100 && walletValueUsd > 0) {
       achievements.push({ 
         title: 'Shrimp 🦐', 
-        description: 'Wallet value under $100'
+        description: `Wallet value under $100 (Current: $${walletValueUsd.toFixed(2)})`
       });
     }
     
@@ -1098,7 +1101,7 @@ function generateAchievements(walletData) {
     // Portfolio balance achievements - ensure tokens is an array first
     let solBalance = 0;
     let hasStablecoins = false;
-    
+
     if (isValidArray(walletData.tokens)) {
       try {
         // Find SOL token
@@ -1118,7 +1121,7 @@ function generateAchievements(walletData) {
         console.error('Error checking token portfolio:', error);
       }
     }
-    
+
     if (hasStablecoins) {
       achievements.push({ 
         title: 'Stablecoin Lover 💲', 
@@ -1126,8 +1129,7 @@ function generateAchievements(walletData) {
       });
     }
     
-    // Trading pattern achievements based on wallet data
-    // Use more accurate checks for wallet patterns
+    // Trading pattern achievements based on wallet score
     let tradingPattern = '';
     let tradingDescription = '';
     
@@ -1208,18 +1210,28 @@ async function generateRoast(walletData) {
     // Convert data to readable format for OpenAI
     const walletPreview = walletData.address ? `${walletData.address.slice(0, 6)}...${walletData.address.slice(-4)}` : "Unknown";
     const stats = walletData.stats || {};
-    const gasSpent = stats.gasSpent || "Unknown";
-    const totalTrades = stats.totalTrades || 0;
-    const successRate = stats.successRate || 0;
+    const totalTrades = stats.totalTrades || walletData.totalTrades || 0;
+    const successRate = stats.successRate || walletData.successRate || 0;
+    const nativeBalance = stats.nativeBalance || walletData.nativeBalance || "Unknown";
+    const walletValueUsd = parseFloat(stats.walletValue || walletData.walletValue || 0);
     
     const prompt = `Generate a funny, sarcastic roast of this Solana wallet:
       - Address: ${walletPreview}
-      - SOL Balance: ${walletData.nativeBalance || stats.nativeBalance || "Unknown"} SOL
-      - Total Transactions: ${stats.totalTrades || walletData.totalTrades || 0}
-      - Success Rate: ${stats.successRate || 0}%
-      - Wallet Value: $${stats.walletValue || walletData.walletValue || 0}
+      - SOL Balance: ${nativeBalance} SOL
+      - Total Transactions: ${totalTrades}
+      - Success Rate: ${successRate}%
+      - Wallet Value: $${walletValueUsd}
       
-      The roast should be funny and mean, about 1-2 sentences, and include ACCURATE details from the wallet stats. DO NOT claim the wallet is inactive if it has transactions. DO NOT claim the success rate is 0% unless it actually is.`;
+      IMPORTANT GUIDELINES:
+      - This wallet has exactly ${totalTrades} total transactions - DO NOT claim it has 0 transactions if this number is greater than 0
+      - The SOL balance is ${nativeBalance} SOL - Use this exact value in your roast
+      - The wallet value is $${walletValueUsd} - Use this exact dollar amount in your roast if you mention value
+      - DO NOT claim the wallet is inactive if it has any transactions
+      - DO NOT invent a success rate - use the exact ${successRate}% figure if you mention it
+      - DO NOT make up information that contradicts any of the stats above
+      - DO NOT claim the wallet has made or lost money unless that information is provided
+      
+      The roast should be very rude and mean, really tpaping intot he web3 culturue of being a degenrate loser, about 1-2 sentences, and include ACCURATE details from the wallet stats.`;
       
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -1341,14 +1353,26 @@ function generateFakeData(address) {
  */
 async function saveWalletToLeaderboard(address, walletData, stats, roast) {
   try {
-    const walletValue = isValidArray(walletData.tokens) ? 
-      walletData.tokens.reduce((sum, token) => {
+    console.log('Calculating wallet value for leaderboard from tokens:', 
+                isValidArray(walletData.tokens) ? walletData.tokens.length : 'no tokens');
+    
+    // First try to use the pre-calculated wallet value if available
+    let walletValue = parseFloat(stats.walletValue || walletData.walletValue || 0);
+    
+    // If no pre-calculated value, try to calculate from tokens
+    if (walletValue === 0 && isValidArray(walletData.tokens)) {
+      walletValue = walletData.tokens.reduce((sum, token) => {
         // Only add if the token has price and amount
         if (token && token.price && token.amount) {
-          return sum + (parseFloat(token.price) * parseFloat(token.amount));
+          const tokenValue = parseFloat(token.price) * parseFloat(token.amount);
+          console.log(`Token ${token.name}: ${token.amount} × $${token.price} = $${tokenValue.toFixed(2)}`);
+          return sum + tokenValue;
         }
         return sum;
-      }, 0) : 0;
+      }, 0);
+    }
+    
+    console.log(`Final wallet value for leaderboard: $${walletValue.toFixed(2)}`);
 
     const leaderboardData = {
       address,
