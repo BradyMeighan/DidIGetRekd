@@ -4,6 +4,8 @@ const cors = require('cors');
 const mongoose = require('mongoose');
 const walletRoutes = require('./routes/wallet');
 const leaderboardRoutes = require('./routes/leaderboard');
+const bugReportRoutes = require('./routes/bugReportRoutes');
+const visitorRoutes = require('./routes/visitorRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 3001;
@@ -22,6 +24,10 @@ app.use('/api/wallet', walletRoutes);
 console.log('Wallet routes mounted at /api/wallet');
 app.use('/api/leaderboard', leaderboardRoutes);
 console.log('Leaderboard routes mounted at /api/leaderboard');
+app.use('/api', bugReportRoutes);
+console.log('Bug report routes mounted at /api/bug-report');
+app.use('/api', visitorRoutes);
+console.log('Visitor routes mounted at /api/visitors');
 
 // Debug: Print all registered routes
 console.log('Registered routes:');
