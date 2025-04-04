@@ -11,6 +11,29 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const HELIUS_API_URL = `https://api.helius.xyz/v0/addresses`;
 
 /**
+ * Fetch the current SOL price from CoinGecko API
+ * @returns {Promise<number>} Current SOL price in USD
+ */
+async function fetchSolPrice() {
+  try {
+    console.log('Fetching current SOL price from CoinGecko...');
+    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    
+    if (response.data && response.data.solana && response.data.solana.usd) {
+      const price = response.data.solana.usd;
+      console.log(`Current SOL price: $${price}`);
+      return price;
+    } else {
+      console.log('Could not get SOL price from CoinGecko, using fallback price');
+      return 125; // Fallback price if API fails
+    }
+  } catch (error) {
+    console.error('Error fetching SOL price:', error.message);
+    return 125; // Fallback price if API fails
+  }
+}
+
+/**
  * Analyzes a wallet address and returns statistics
  * @param {string} address - The wallet address to analyze
  * @param {Object} options - Additional options
@@ -19,6 +42,9 @@ const HELIUS_API_URL = `https://api.helius.xyz/v0/addresses`;
 async function analyzeWallet(address, options = {}) {
   try {
     console.log(`Analyzing wallet: ${address} with options:`, options);
+    
+    // Fetch current SOL price
+    const solPrice = await fetchSolPrice();
     
     // Check if we have the Helius API key
     if (!process.env.HELIUS_API_KEY) {
@@ -42,10 +68,10 @@ async function analyzeWallet(address, options = {}) {
       address,
       nativeBalance: walletData.nativeBalance?.toFixed(4) || "0",
       totalTrades: 0,
-      pnl: "Unknown",
       gasSpent: "0",
       successRate: 0,
-      error: null
+      error: null,
+      solPrice
     };
     
     // If no transactions found, return error state with basic balance info
@@ -61,7 +87,7 @@ async function analyzeWallet(address, options = {}) {
           tokens.push({ 
             name: 'SOL', 
             amount: walletData.nativeBalance.toFixed(4), 
-            value: (walletData.nativeBalance * 20).toFixed(2) // estimated value
+            value: (walletData.nativeBalance * solPrice).toFixed(2) // Use actual SOL price
           });
         }
         
@@ -88,6 +114,7 @@ async function analyzeWallet(address, options = {}) {
         stats: {
           ...baseStats,
           tokens,
+          // NFTs have been removed as they can't be accurately determined
           error: "NO_TRANSACTIONS",
           message: "No transactions found for this wallet"
         },
@@ -95,11 +122,12 @@ async function analyzeWallet(address, options = {}) {
       };
     }
     
-    // Calculate wallet stats
-    const stats = calculateWalletStats(walletData);
+    // Calculate wallet stats (pass the SOL price)
+    const stats = calculateWalletStats(walletData, solPrice);
     
     // Make sure the address is included
     stats.address = address;
+    stats.solPrice = solPrice;
     
     // Generate a roast based on the stats
     const roast = await generateRoast(address, stats);
@@ -317,9 +345,10 @@ async function fetchWalletData(address) {
 /**
  * Calculate wallet statistics from wallet data
  * @param {Object} walletData - Comprehensive wallet data
+ * @param {number} solPrice - Current SOL price in USD
  * @returns {Object} - Wallet statistics
  */
-function calculateWalletStats(walletData) {
+function calculateWalletStats(walletData, solPrice) {
   console.log('Calculating wallet stats from data:', Object.keys(walletData));
   
   try {
@@ -409,7 +438,7 @@ function calculateWalletStats(walletData) {
     // Generate token holdings - start with SOL which is always accurate
     const tokens = [
       // SOL balance is reliable
-      { name: 'SOL', amount: nativeBalance.toFixed(4), value: (nativeBalance * 20).toFixed(2) } // use $20 as example price
+      { name: 'SOL', amount: nativeBalance.toFixed(4), value: (nativeBalance * solPrice).toFixed(2) } // Use actual SOL price
     ];
     
     // Add token accounts if available
@@ -465,11 +494,15 @@ function calculateWalletStats(walletData) {
       nativeBalance
     });
     
+    // Create summary stats for display
+    const portfolioValue = nativeBalance * solPrice;
+    const portfolioValueFormatted = portfolioValue.toFixed(2);
+    
     return {
       address: walletData.address || "unknown",
       totalTrades,
-      // PnL can't be accurately determined without historical price data
-      pnl: "Unknown",
+      // Replace PnL with a different metric that we can calculate
+      walletValue: portfolioValueFormatted,
       nativeBalance: nativeBalance.toFixed(4),
       gasSpent: totalGasSpent.toFixed(6),
       successRate,
@@ -484,8 +517,9 @@ function calculateWalletStats(walletData) {
       // Visualization data
       txHistory,
       tokens,
-      // No NFT data - remove fake data
-      achievements: totalTrades > 0 ? achievements : []
+      // Remove NFTs completely
+      achievements: totalTrades > 0 ? achievements : [],
+      solPrice
     };
   } catch (error) {
     console.error('Error calculating wallet stats:', error);
@@ -510,6 +544,7 @@ function generateTxHistory(signatures, transactions) {
   // Create a map for the last 30 days
   const txHistory = [];
   const now = new Date();
+  const dayMap = new Map(); // To collect transaction counts by day
   
   // Generate empty day entries
   for (let i = 29; i >= 0; i--) {
@@ -517,14 +552,20 @@ function generateTxHistory(signatures, transactions) {
     date.setDate(date.getDate() - i);
     date.setHours(0, 0, 0, 0);
     
+    const dayKey = date.toISOString().slice(0, 10); // YYYY-MM-DD format
+    
     txHistory.push({
       day: i + 1,
+      date: dayKey,
       value: 0,
       transactions: 0
     });
+    
+    // Initialize the day map
+    dayMap.set(dayKey, { value: 0, transactions: 0 });
   }
   
-  // Use signatures first (most reliable)
+  // Process all signatures to build the day map
   if (signatures && signatures.length > 0) {
     // Log a sample signature to understand format
     if (signatures.length > 0) {
@@ -537,22 +578,30 @@ function generateTxHistory(signatures, transactions) {
       const txDate = new Date(sig.blockTime * 1000);
       if (isNaN(txDate.getTime())) return;
       
+      // Log processing date
       console.log(`Processing signature from date: ${txDate.toISOString()}`);
+      
+      // Get the date part only
+      const dayKey = txDate.toISOString().slice(0, 10);
       
       // Only count transactions from the last 30 days
       const diffTime = now - txDate;
       const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
       
       if (diffDays >= 0 && diffDays < 30) {
-        const dayIndex = 29 - diffDays;
-        
-        txHistory[dayIndex].transactions++;
-        
-        // Positive value for successful tx, negative for failed
-        if (sig.err) {
-          txHistory[dayIndex].value -= 0.5;
-        } else {
-          txHistory[dayIndex].value += 0.5;
+        // Update the day map
+        if (dayMap.has(dayKey)) {
+          const dayData = dayMap.get(dayKey);
+          dayData.transactions++;
+          
+          // Positive value for successful tx, negative for failed
+          if (sig.err) {
+            dayData.value -= 0.5;
+          } else {
+            dayData.value += 0.5;
+          }
+          
+          dayMap.set(dayKey, dayData);
         }
       }
     });
@@ -576,33 +625,54 @@ function generateTxHistory(signatures, transactions) {
       const txDate = new Date(timestamp);
       if (isNaN(txDate.getTime())) return;
       
+      // Get the date part only
+      const dayKey = txDate.toISOString().slice(0, 10);
+      
       // Only count transactions from the last 30 days
       const diffTime = now - txDate;
       const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
       
       if (diffDays >= 0 && diffDays < 30) {
-        const dayIndex = 29 - diffDays;
-        
-        txHistory[dayIndex].transactions++;
-        
-        // Positive value for successful tx, negative for failed
-        if (tx.err || tx.meta?.err || !tx.successful) {
-          txHistory[dayIndex].value -= 0.5;
-        } else {
-          txHistory[dayIndex].value += 0.5;
+        // Update the day map
+        if (dayMap.has(dayKey)) {
+          const dayData = dayMap.get(dayKey);
+          dayData.transactions++;
+          
+          // Positive value for successful tx, negative for failed
+          if (tx.err || tx.meta?.err || !tx.successful) {
+            dayData.value -= 0.5;
+          } else {
+            dayData.value += 0.5;
+          }
+          
+          dayMap.set(dayKey, dayData);
         }
       }
     });
   }
   
-  // Format values and ensure they're not too extreme
+  // Map the day data back to the txHistory array
   txHistory.forEach(day => {
-    day.value = parseFloat(day.value.toFixed(1));
-    // Clamp between -3 and 3 for reasonable display
-    day.value = Math.max(-3, Math.min(3, day.value));
+    const dayData = dayMap.get(day.date);
+    if (dayData) {
+      day.value = parseFloat(dayData.value.toFixed(1));
+      day.transactions = dayData.transactions;
+      
+      // Ensure value is between -3 and 3 for display purposes
+      day.value = Math.max(-3, Math.min(3, day.value));
+      
+      // Ensure value is never zero if there are transactions
+      // (this helps with chart visibility)
+      if (day.transactions > 0 && day.value === 0) {
+        day.value = 0.5;
+      }
+    }
   });
   
-  console.log(`Generated transaction history with data: ${JSON.stringify(txHistory.filter(d => d.transactions > 0))}`);
+  // Log days that have transactions
+  const daysWithTransactions = txHistory.filter(d => d.transactions > 0);
+  console.log(`Generated transaction history with data: ${JSON.stringify(daysWithTransactions)}`);
+  
   return txHistory;
 }
 
