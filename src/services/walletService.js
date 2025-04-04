@@ -691,9 +691,11 @@ function calculateWalletStats(walletData, solPrice = 100) {
           }
         }
         
-        // Add SOL label only once at the end
+        // Add SOL label only once at the end - check if it already has SOL
         if (amount !== "--") {
-          amount = `${amount} SOL`;
+          if (!amount.toString().includes('SOL')) {
+            amount = `${amount} SOL`;
+          }
         }
         
         return {
