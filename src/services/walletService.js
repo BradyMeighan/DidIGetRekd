@@ -11,122 +11,138 @@ const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const HELIUS_API_URL = `https://api.helius.xyz/v0/addresses`;
 
 /**
- * Get wallet statistics and analysis
- * @param {string} address - Wallet address to analyze
+ * Analyzes a wallet address and returns statistics
+ * @param {string} address - The wallet address to analyze
  * @param {Object} options - Additional options
- * @returns {Promise<Object>} Wallet statistics and roast
+ * @returns {Object} Wallet statistics
  */
 async function analyzeWallet(address, options = {}) {
   try {
-    console.log(`Analyzing wallet: ${address}`);
+    console.log(`Analyzing wallet: ${address} with options:`, options);
     
-    if (!HELIUS_API_KEY) {
-      console.warn('HELIUS_API_KEY is not set. Using mock data for demonstration.');
-      return generateMockData(address);
+    // Check if we have the Helius API key
+    if (!process.env.HELIUS_API_KEY) {
+      console.log('HELIUS_API_KEY not set, using mock data');
+      const mockData = generateMockData(address);
+      
+      return {
+        stats: mockData,
+        roast: await generateRoast(address, mockData)
+      };
     }
-
-    // Use Helius API to get wallet transactions
+    
+    // Fetch wallet transactions
     const transactions = await fetchWalletTransactions(address);
     
     if (!transactions || transactions.length === 0) {
-      console.log(`No transactions found for wallet: ${address}`);
-      
-      // For empty wallets or when no transactions are returned, provide mock data
+      console.log(`No transactions found for wallet ${address}, using mock data`);
       const mockData = generateMockData(address);
-      mockData.roast = "This wallet is so inactive that even our algorithms fell asleep trying to analyze it.";
-      return mockData;
+      
+      return {
+        stats: mockData,
+        roast: await generateRoast(address, mockData)
+      };
     }
-
-    // Process transactions to extract statistics
+    
+    console.log(`Found ${transactions.length} transactions for wallet ${address}`);
+    
+    // Calculate wallet stats
     const stats = calculateWalletStats(transactions);
     
-    // Generate a roast
+    // Make sure the address is included
+    stats.address = address;
+    
+    // Generate a roast based on the stats
     const roast = await generateRoast(address, stats);
-
-    const result = { 
-      stats, 
+    
+    return {
+      stats,
       roast
     };
-
-    // Include transactions if requested
-    if (options.includeTransactions) {
-      result.transactions = processTransactionsForFrontend(transactions);
-    }
-
-    return result;
   } catch (error) {
-    console.error('Error analyzing wallet:', error);
+    console.error(`Error analyzing wallet ${address}:`, error);
     
-    // Provide mock data if there's an error
-    console.log('Falling back to mock data due to error');
-    return generateMockData(address);
+    // Fallback to mock data
+    const mockData = generateMockData(address);
+    return {
+      stats: mockData,
+      roast: await generateRoast(address, mockData)
+    };
   }
 }
 
 /**
- * Generate mock data for demonstration purposes
- * @param {string} address - Wallet address
- * @returns {Object} Mock wallet data
+ * Generates mock wallet data for testing
  */
 function generateMockData(address) {
-  console.log(`Generating mock data for wallet: ${address}`);
-  
-  // Create some realistic-looking mock data
   const totalTrades = Math.floor(Math.random() * 50) + 5;
-  const pnl = (Math.random() * 20) - 10; // Between -10 and +10 SOL
-  const gasSpent = Math.random() * 1.5; // Between 0 and 1.5 SOL
+  const failedTxCount = Math.floor(totalTrades * Math.random() * 0.4);
+  const successRate = totalTrades > 0 ? Math.round(((totalTrades - failedTxCount) / totalTrades) * 100) : 0;
+  const gasSpent = (Math.random() * 0.5 + 0.05).toFixed(4);
+  const avgGasPerTx = (parseFloat(gasSpent) / Math.max(1, totalTrades)).toFixed(6);
   
-  const stats = {
+  // Generate transaction history for the last 30 days
+  const txHistory = [];
+  for (let i = 0; i < 30; i++) {
+    txHistory.push({
+      day: i + 1,
+      value: (Math.random() * 2 - 1).toFixed(1),
+      transactions: Math.floor(Math.random() * 5)
+    });
+  }
+  
+  // Generate token holdings
+  const tokens = [
+    { name: 'SOL', amount: Math.random() * 5 + 0.5, value: (Math.random() * 200 + 50).toFixed(2) },
+    { name: 'BONK', amount: Math.random() * 100000 + 1000, value: (Math.random() * 50 + 10).toFixed(2) },
+    { name: 'JUP', amount: Math.random() * 50 + 5, value: (Math.random() * 100 + 20).toFixed(2) }
+  ];
+  
+  // Generate NFT holdings
+  const nfts = [
+    { name: 'DeGods', floor: 120, owned: Math.random() > 0.7 ? 1 : 0 },
+    { name: 'Okay Bears', floor: 80, owned: Math.random() > 0.6 ? 1 : 0 },
+    { name: 'Froganas', floor: 30, owned: Math.random() > 0.5 ? 1 : 0 }
+  ];
+  
+  // Calculate score
+  const score = calculateScore({
     totalTrades,
-    pnl,
-    gasSpent,
-    score: calculateScore({
-      totalTrades,
-      pnl,
-      gasSpent,
-      successRate: 95,
-      avgGasPerTx: gasSpent / totalTrades
-    }),
-    swapCount: Math.floor(totalTrades * 0.6),
-    mintCount: Math.floor(totalTrades * 0.2),
-    transfersCount: Math.floor(totalTrades * 0.2),
-    successRate: 95,
-    failedTxCount: Math.floor(totalTrades * 0.05),
-    avgGasPerTx: gasSpent / totalTrades,
-    firstActivityDate: new Date(Date.now() - (Math.random() * 90 * 24 * 60 * 60 * 1000)), // Random date in last 90 days
-    lastActivityDate: new Date(Date.now() - (Math.random() * 7 * 24 * 60 * 60 * 1000)), // Random date in last 7 days
-  };
-  
-  // Round values for cleaner display
-  stats.pnl = parseFloat(stats.pnl.toFixed(4));
-  stats.gasSpent = parseFloat(stats.gasSpent.toFixed(4));
-  stats.avgGasPerTx = parseFloat(stats.avgGasPerTx.toFixed(6));
-  
-  // Generate mock transactions
-  const transactions = Array(10).fill().map((_, i) => {
-    const isPositive = Math.random() > 0.5;
-    return {
-      timestamp: Date.now() - (i * 24 * 60 * 60 * 1000), // One day apart
-      type: ['SWAP', 'TRANSFER', 'NFT_MINT'][Math.floor(Math.random() * 3)],
-      amount: isPositive ? Math.random() * 2 : -Math.random() * 2,
-      gas: Math.random() * 0.01,
-      successful: Math.random() > 0.05, // 95% success rate
-      signature: `mock_signature_${i}`
-    };
+    successRate,
+    avgGasPerTx: parseFloat(avgGasPerTx),
+    transfersCount: Math.floor(totalTrades * 0.7),
+    swapCount: Math.floor(totalTrades * 0.2),
+    mintCount: Math.floor(totalTrades * 0.1)
   });
   
-  // Generate a mock roast
-  const roast = [
-    `With a PnL of ${stats.pnl > 0 ? '+' : ''}${stats.pnl} SOL across ${stats.totalTrades} trades, this wallet is the financial equivalent of a participation trophy.`,
-    `Spending ${stats.gasSpent} SOL on gas fees just to lose money? I've seen better investment strategies from a magic 8-ball.`,
-    `This wallet has made ${stats.totalTrades} trades and has a whopping ${stats.pnl.toFixed(2)} SOL to show for it. Even a blindfolded monkey could do better.`,
-    `With ${stats.failedTxCount} failed transactions, it seems like this wallet's strategy is 'fail until you succeed'... except for the succeeding part.`
-  ][Math.floor(Math.random() * 4)];
+  // Generate achievements
+  const achievements = generateAchievements({
+    score,
+    totalTrades,
+    successRate,
+    totalGasSpent: parseFloat(gasSpent),
+    swapCount: Math.floor(totalTrades * 0.2)
+  });
   
   return {
-    stats,
-    transactions,
-    roast
+    address: address || "unknown",
+    totalTrades,
+    pnl: (Math.random() * 10 - 5).toFixed(2),
+    gasSpent,
+    successRate,
+    avgGasPerTx,
+    transfersCount: Math.floor(totalTrades * 0.7),
+    swapCount: Math.floor(totalTrades * 0.2),
+    mintCount: Math.floor(totalTrades * 0.1),
+    failedTxCount,
+    firstActivityDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
+    lastActivityDate: new Date().toISOString(),
+    score,
+    // Visualization data
+    txHistory,
+    tokens,
+    nfts,
+    achievements
   };
 }
 
@@ -172,100 +188,101 @@ async function fetchWalletTransactions(address) {
  * @returns {Object} Wallet statistics
  */
 function calculateWalletStats(transactions) {
-  // Initialize stats
-  const stats = {
-    totalTrades: 0,
-    pnl: 0,
-    gasSpent: 0,
-    score: 0,
-    swapCount: 0,
-    mintCount: 0,
-    transfersCount: 0,
-    successRate: 0,
-    failedTxCount: 0,
-    firstActivityDate: null,
-    lastActivityDate: null,
-    avgGasPerTx: 0,
-  };
-
-  if (!transactions || transactions.length === 0) {
-    return stats;
-  }
-
-  // Track successful and failed transactions
-  let successfulTxCount = 0;
-  let failedTxCount = 0;
-
-  // Process each transaction
-  transactions.forEach(tx => {
-    try {
-      // Track activity dates
-      const timestamp = new Date(tx.timestamp * 1000);
-      if (!stats.firstActivityDate || timestamp < stats.firstActivityDate) {
-        stats.firstActivityDate = timestamp;
-      }
-      if (!stats.lastActivityDate || timestamp > stats.lastActivityDate) {
-        stats.lastActivityDate = timestamp;
-      }
-
-      // Count total trades
-      stats.totalTrades++;
-
-      // Track transaction type
-      if (tx.type === 'SWAP') {
-        stats.swapCount++;
-      } else if (tx.type === 'NFT_MINT' || tx.type === 'MINT') {
-        stats.mintCount++;
-      } else if (tx.type === 'TRANSFER') {
-        stats.transfersCount++;
-      }
-
-      // Track success rate
-      if (tx.successful) {
-        successfulTxCount++;
-      } else {
-        failedTxCount++;
-      }
-
-      // Calculate gas spent
-      if (tx.fee) {
-        stats.gasSpent += tx.fee / 1e9; // Convert lamports to SOL
-      }
-
-      // Estimate PnL (very crude approximation, would need better data)
-      // For demo purposes, we'll use a simplistic approach
-      if (tx.type === 'SWAP' && tx.successful) {
-        // Simulate some PnL based on transaction values
-        if (tx.nativeTransfers && tx.nativeTransfers.length > 0) {
-          const txValue = tx.nativeTransfers.reduce((sum, transfer) => sum + transfer.amount, 0) / 1e9;
-          
-          // Add some randomness for demonstration, but weighted by transaction value
-          const pnlFactor = Math.random() > 0.5 ? 1 : -1; // Random gain or loss
-          stats.pnl += pnlFactor * txValue * Math.random() * 0.2; // Up to 20% gain/loss per tx
-        }
-      }
-    } catch (err) {
-      console.error('Error processing transaction:', err);
-    }
-  });
-
-  // Calculate success rate
-  stats.successRate = stats.totalTrades > 0 ? (successfulTxCount / stats.totalTrades) * 100 : 0;
-  stats.failedTxCount = failedTxCount;
+  console.log(`Calculating stats for ${transactions.length} transactions`);
   
-  // Calculate average gas per transaction
-  stats.avgGasPerTx = stats.totalTrades > 0 ? stats.gasSpent / stats.totalTrades : 0;
-
-  // Calculate wallet score (0-100)
-  stats.score = calculateScore(stats);
-
-  // Round decimal values for cleaner display
-  stats.pnl = parseFloat(stats.pnl.toFixed(4));
-  stats.gasSpent = parseFloat(stats.gasSpent.toFixed(4));
-  stats.avgGasPerTx = parseFloat(stats.avgGasPerTx.toFixed(6));
-  stats.successRate = parseFloat(stats.successRate.toFixed(2));
-
-  return stats;
+  if (!transactions || transactions.length === 0) {
+    return generateMockData();
+  }
+  
+  try {
+    // Sort transactions by time (most recent first)
+    const sortedTxs = [...transactions].sort((a, b) => {
+      return new Date(b.timestamp) - new Date(a.timestamp);
+    });
+    
+    // Get first and last activity dates
+    const firstActivityDate = sortedTxs[sortedTxs.length - 1].timestamp;
+    const lastActivityDate = sortedTxs[0].timestamp;
+    
+    // Count different transaction types
+    let transfersCount = 0;
+    let swapCount = 0;
+    let mintCount = 0;
+    let failedTxCount = 0;
+    let totalGasSpent = 0;
+    
+    // Track success/failure
+    transactions.forEach(tx => {
+      // Count transaction types
+      if (tx.type === 'TRANSFER') transfersCount++;
+      if (tx.type === 'SWAP') swapCount++;
+      if (tx.type === 'MINT' || tx.type === 'NFT_MINT') mintCount++;
+      
+      // Count failures
+      if (!tx.successful) failedTxCount++;
+      
+      // Sum gas
+      totalGasSpent += parseFloat(tx.fee || 0);
+    });
+    
+    const totalTrades = transactions.length;
+    const successCount = totalTrades - failedTxCount;
+    const successRate = totalTrades > 0 ? Math.round((successCount / totalTrades) * 100) : 0;
+    const avgGasPerTx = totalTrades > 0 ? (totalGasSpent / totalTrades) : 0;
+    
+    // Calculate a score based on activity
+    let score = calculateScore({
+      totalTrades,
+      successRate,
+      avgGasPerTx,
+      transfersCount,
+      swapCount,
+      mintCount
+    });
+    
+    // Generate transaction history for visualization (last 30 days)
+    const txHistory = generateTxHistory(transactions);
+    
+    // Generate token holdings based on swaps and transfers
+    const tokens = generateTokenHoldings(transactions);
+    
+    // Generate NFT holdings based on mints
+    const nfts = generateNftHoldings(transactions);
+    
+    // Generate achievements based on stats
+    const achievements = generateAchievements({
+      score,
+      totalTrades,
+      successRate,
+      totalGasSpent,
+      swapCount
+    });
+    
+    // Return stats object
+    return {
+      address: transactions[0]?.account || "unknown",
+      totalTrades,
+      pnl: calculatePnl(transactions),
+      gasSpent: totalGasSpent.toFixed(4),
+      successRate,
+      avgGasPerTx: avgGasPerTx.toFixed(6),
+      transfersCount,
+      swapCount,
+      mintCount,
+      failedTxCount,
+      firstActivityDate,
+      lastActivityDate,
+      score,
+      // Visualization data
+      txHistory,
+      tokens,
+      nfts, 
+      achievements
+    };
+  } catch (error) {
+    console.error('Error calculating wallet stats:', error);
+    return generateMockData();
+  }
 }
 
 /**
@@ -402,6 +419,150 @@ function getDefaultRoast(stats) {
   return roasts[Math.floor(Math.random() * roasts.length)];
 }
 
+// Generate transaction history for the last 30 days
+const generateTxHistory = (transactions) => {
+  const txHistory = [];
+  const now = new Date();
+  
+  // Create 30 days of data
+  for (let i = 29; i >= 0; i--) {
+    const date = new Date(now);
+    date.setDate(date.getDate() - i);
+    date.setHours(0, 0, 0, 0);
+    
+    // Find transactions for this day
+    const dayTxs = transactions.filter(tx => {
+      const txDate = new Date(tx.timestamp);
+      return txDate.getDate() === date.getDate() && 
+             txDate.getMonth() === date.getMonth() && 
+             txDate.getFullYear() === date.getFullYear();
+    });
+    
+    // Calculate day's value (can be positive or negative)
+    const successfulTxs = dayTxs.filter(tx => tx.successful);
+    const failedTxs = dayTxs.filter(tx => !tx.successful);
+    
+    // Simple formula: successful transactions are positive, failed are negative
+    const value = (successfulTxs.length - failedTxs.length) / Math.max(1, dayTxs.length);
+    
+    txHistory.push({
+      day: i + 1,
+      value: parseFloat(value.toFixed(1)),
+      transactions: dayTxs.length
+    });
+  }
+  
+  return txHistory;
+};
+
+// Generate token holdings based on transactions
+const generateTokenHoldings = (transactions) => {
+  // This is a simplification - in a real app, you'd analyze the actual token transfers
+  const tokens = [
+    { name: 'SOL', amount: Math.max(0.1, transactions.length / 10), value: (transactions.length * 5).toFixed(2) }
+  ];
+  
+  // Add some tokens based on swap count
+  const swapTxs = transactions.filter(tx => tx.type === 'SWAP');
+  if (swapTxs.length > 0) {
+    tokens.push({ name: 'BONK', amount: swapTxs.length * 10000, value: (swapTxs.length * 2).toFixed(2) });
+  }
+  
+  if (swapTxs.length > 2) {
+    tokens.push({ name: 'JUP', amount: swapTxs.length * 5, value: (swapTxs.length * 8).toFixed(2) });
+  }
+  
+  return tokens;
+};
+
+// Generate NFT holdings
+const generateNftHoldings = (transactions) => {
+  const mintTxs = transactions.filter(tx => tx.type === 'MINT' || tx.type === 'NFT_MINT');
+  
+  // Default NFTs (always include these in the list)
+  const nfts = [
+    { name: 'DeGods', floor: 120, owned: mintTxs.length > 5 ? 1 : 0 },
+    { name: 'Okay Bears', floor: 80, owned: mintTxs.length > 2 ? 1 : 0 },
+    { name: 'Froganas', floor: 30, owned: mintTxs.length > 0 ? 2 : 0 }
+  ];
+  
+  return nfts;
+};
+
+// Generate achievements based on stats
+const generateAchievements = ({ score, totalTrades, successRate, totalGasSpent, swapCount }) => {
+  const achievements = [];
+  
+  // Score-based achievements
+  if (score < 30) {
+    achievements.push({ 
+      title: 'Rug Victim 🫠', 
+      description: 'You bought high and sold low. Classic.' 
+    });
+  } else if (score < 60) {
+    achievements.push({ 
+      title: 'Paper Hands 🧻', 
+      description: 'Selling at the first sign of trouble, huh?' 
+    });
+  } else if (score < 90) {
+    achievements.push({ 
+      title: 'Diamond Hands 💎🙌', 
+      description: 'HODL is your middle name.' 
+    });
+  } else {
+    achievements.push({ 
+      title: 'Giga Chad Ape 🦍', 
+      description: 'The wolf of Solana Street.' 
+    });
+  }
+  
+  // Activity-based achievements
+  if (totalGasSpent > 1.5) {
+    achievements.push({ 
+      title: 'Gas Guzzler 🛢️', 
+      description: 'Funding validators one tx at a time.' 
+    });
+  }
+  
+  if (totalTrades > 100) {
+    achievements.push({ 
+      title: 'Degenerate Trader 🎰', 
+      description: 'Sleep? Who needs that?' 
+    });
+  }
+  
+  if (successRate < 50) {
+    achievements.push({
+      title: 'Transaction Fumbler 🤦',
+      description: 'Half your transactions failed. Have you tried turning it off and on again?'
+    });
+  }
+  
+  if (swapCount > 10) {
+    achievements.push({
+      title: 'Swap King 👑',
+      description: 'You swap tokens more often than you change clothes.'
+    });
+  }
+  
+  return achievements;
+};
+
+// Calculate PnL (simplified - in a real app this would be much more complex)
+const calculatePnl = (transactions) => {
+  // This is a simplification - in a real app, you'd analyze the actual token transfers and their values
+  // For now, just return a small random value based on transaction count
+  const swapTxs = transactions.filter(tx => tx.type === 'SWAP');
+  const successfulSwaps = swapTxs.filter(tx => tx.successful);
+  
+  // More successful swaps = higher chance of positive PnL
+  const pnlFactor = (successfulSwaps.length / Math.max(1, swapTxs.length)) - 0.5;
+  const pnl = pnlFactor * transactions.length * 0.2;
+  
+  return pnl.toFixed(2);
+};
+
 module.exports = {
-  analyzeWallet
+  analyzeWallet,
+  generateRoast
 }; 
