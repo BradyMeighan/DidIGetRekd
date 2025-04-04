@@ -129,6 +129,9 @@ async function analyzeWallet(address, options = {}) {
       return generateFakeData(address);
     }
     
+    // Add a small delay to ensure all API calls have completed
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     // Fetch current SOL price
     const solPrice = await fetchSolPrice();
     console.log(`Current SOL price: $${solPrice}`);
@@ -655,13 +658,37 @@ function calculateWalletStats(walletData, solPrice = 100) {
     // Format transactions for display in the table
     let recentTransactions = [];
     if (transactions && transactions.length > 0) {
-      recentTransactions = transactions.map(tx => ({
-        description: tx.description || 'Transaction',
-        signature: tx.signature || null,
-        timestamp: tx.timestamp || (tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null),
-        successful: tx.successful !== undefined ? tx.successful : (tx.err === null),
-        fee: tx.fee || tx.meta?.fee || 0,
-      }));
+      recentTransactions = transactions.map(tx => {
+        // Try to extract the amount from the transaction
+        let amount = "--";
+        
+        // Check if we have a parsed transfer in the transaction
+        if (tx.transaction?.message?.instructions) {
+          tx.transaction.message.instructions.forEach(instruction => {
+            if (instruction.program === 'system' && instruction.parsed?.type === 'transfer') {
+              const lamports = instruction.parsed.info.lamports;
+              amount = (lamports / 1000000000).toFixed(4) + " SOL"; // Convert lamports to SOL
+            }
+          });
+        }
+        
+        // If we couldn't find an amount but have a description with an amount, extract it
+        if (amount === "--" && tx.description && tx.description.includes("SOL")) {
+          const match = tx.description.match(/(\d+\.\d+) SOL/);
+          if (match && match[1]) {
+            amount = match[1] + " SOL";
+          }
+        }
+        
+        return {
+          description: tx.description || 'Transaction',
+          signature: tx.signature || null,
+          timestamp: tx.timestamp || (tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null),
+          successful: tx.successful !== undefined ? tx.successful : (tx.err === null),
+          fee: tx.fee || tx.meta?.fee || 0,
+          amount: amount
+        };
+      });
     }
     
     // Generate achievements with additional metrics
@@ -1046,10 +1073,18 @@ function generateAchievements(walletData) {
     }
     
     // Wallet value achievements in USD
-    const walletValueUsd = parseFloat(walletData.walletValue || 0);
-    const walletInfo = walletData.tokens ? `(${walletData.tokens.length} tokens found)` : '(no tokens found)';
-    console.log(`Wallet value for achievements: $${walletValueUsd} ${walletInfo}`);
-    console.log(`Wallet check: > 10000: ${walletValueUsd > 10000}, < 100: ${walletValueUsd < 100}, > 0: ${walletValueUsd > 0}`);
+    // Calculate properly from SOL balance if not available
+    const solPrice = parseFloat(walletData.solPrice || 100);
+    const nativeBalance = parseFloat(walletData.nativeBalance || 0);
+    let walletValueUsd = parseFloat(walletData.walletValue || 0);
+
+    // If walletValue is not set, calculate from native balance
+    if (walletValueUsd === 0 && nativeBalance > 0) {
+      walletValueUsd = nativeBalance * solPrice;
+    }
+
+    console.log(`Wallet value for achievements calculation: $${walletValueUsd.toFixed(2)} (${nativeBalance} SOL × $${solPrice})`);
+    console.log(`Wallet achievement checks: > $10,000: ${walletValueUsd > 10000}, < $100: ${walletValueUsd < 100}`);
 
     if (walletValueUsd > 10000) {
       achievements.push({ 
@@ -1210,28 +1245,38 @@ async function generateRoast(walletData) {
     // Convert data to readable format for OpenAI
     const walletPreview = walletData.address ? `${walletData.address.slice(0, 6)}...${walletData.address.slice(-4)}` : "Unknown";
     const stats = walletData.stats || {};
-    const totalTrades = stats.totalTrades || walletData.totalTrades || 0;
-    const successRate = stats.successRate || walletData.successRate || 0;
-    const nativeBalance = stats.nativeBalance || walletData.nativeBalance || "Unknown";
-    const walletValueUsd = parseFloat(stats.walletValue || walletData.walletValue || 0);
-    
+
+    // Make sure to calculate correct values
+    const totalTrades = parseInt(stats.totalTrades || walletData.totalTrades || 0);
+    const successRate = parseInt(stats.successRate || walletData.successRate || 0);
+    const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
+    const solPrice = parseFloat(stats.solPrice || walletData.solPrice || 100);
+
+    // Calculate USD value from SOL balance if wallet value isn't available
+    let walletValueUsd = parseFloat(stats.walletValue || walletData.walletValue || 0);
+    if (walletValueUsd === 0 && nativeBalance > 0) {
+      walletValueUsd = nativeBalance * solPrice;
+    }
+
+    console.log(`Preparing OpenAI prompt with: ${nativeBalance} SOL, ${totalTrades} trades, $${walletValueUsd} value`);
+
     const prompt = `Generate a funny, sarcastic roast of this Solana wallet:
       - Address: ${walletPreview}
-      - SOL Balance: ${nativeBalance} SOL
+      - SOL Balance: ${nativeBalance.toFixed(4)} SOL
       - Total Transactions: ${totalTrades}
       - Success Rate: ${successRate}%
-      - Wallet Value: $${walletValueUsd}
+      - Wallet Value: $${walletValueUsd.toFixed(2)}
       
       IMPORTANT GUIDELINES:
       - This wallet has exactly ${totalTrades} total transactions - DO NOT claim it has 0 transactions if this number is greater than 0
-      - The SOL balance is ${nativeBalance} SOL - Use this exact value in your roast
-      - The wallet value is $${walletValueUsd} - Use this exact dollar amount in your roast if you mention value
+      - The SOL balance is ${nativeBalance.toFixed(4)} SOL - Use this exact value in your roast
+      - The wallet value is $${walletValueUsd.toFixed(2)} - Use this exact dollar amount in your roast if you mention value
       - DO NOT claim the wallet is inactive if it has any transactions
       - DO NOT invent a success rate - use the exact ${successRate}% figure if you mention it
       - DO NOT make up information that contradicts any of the stats above
       - DO NOT claim the wallet has made or lost money unless that information is provided
       
-      The roast should be very rude and mean, really tpaping intot he web3 culturue of being a degenrate loser, about 1-2 sentences, and include ACCURATE details from the wallet stats.`;
+      The roast should be funny, tap into web3 culture and slang, about 1-2 sentences, and include ACCURATE details from the wallet stats.`;
       
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -1353,23 +1398,30 @@ function generateFakeData(address) {
  */
 async function saveWalletToLeaderboard(address, walletData, stats, roast) {
   try {
-    console.log('Calculating wallet value for leaderboard from tokens:', 
-                isValidArray(walletData.tokens) ? walletData.tokens.length : 'no tokens');
+    console.log('Calculating wallet value for leaderboard...');
     
-    // First try to use the pre-calculated wallet value if available
-    let walletValue = parseFloat(stats.walletValue || walletData.walletValue || 0);
+    // First try to use the pre-calculated wallet value from stats
+    let walletValue = parseFloat(stats.walletValue || 0);
     
-    // If no pre-calculated value, try to calculate from tokens
-    if (walletValue === 0 && isValidArray(walletData.tokens)) {
-      walletValue = walletData.tokens.reduce((sum, token) => {
-        // Only add if the token has price and amount
-        if (token && token.price && token.amount) {
-          const tokenValue = parseFloat(token.price) * parseFloat(token.amount);
-          console.log(`Token ${token.name}: ${token.amount} × $${token.price} = $${tokenValue.toFixed(2)}`);
-          return sum + tokenValue;
-        }
-        return sum;
-      }, 0);
+    // If no value from stats, calculate it
+    if (walletValue === 0) {
+      const solPrice = parseFloat(stats.solPrice || walletData.solPrice || 100);
+      const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
+      
+      // Start with native SOL value
+      walletValue = nativeBalance * solPrice;
+      console.log(`Base wallet value from SOL: $${walletValue.toFixed(2)} (${nativeBalance} SOL × $${solPrice})`);
+      
+      // Add token values if available
+      if (isValidArray(walletData.tokens)) {
+        walletData.tokens.forEach(token => {
+          if (token && token.price && token.amount) {
+            const tokenValue = parseFloat(token.price) * parseFloat(token.amount);
+            console.log(`Token ${token.name}: ${token.amount} × $${token.price} = $${tokenValue.toFixed(2)}`);
+            walletValue += tokenValue;
+          }
+        });
+      }
     }
     
     console.log(`Final wallet value for leaderboard: $${walletValue.toFixed(2)}`);
@@ -1380,8 +1432,8 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
       totalTrades: stats.totalTrades || 0,
       gasSpent: stats.gasSpent || 0,
       pnl: stats.pnl || 0,
-      walletValue,
-      nativeBalance: parseFloat(stats.nativeBalance || walletData.nativeBalance || 0),
+      walletValue, // USD value
+      nativeBalance: parseFloat(stats.nativeBalance || walletData.nativeBalance || 0), // SOL balance
       lastRoast: roast
     };
 

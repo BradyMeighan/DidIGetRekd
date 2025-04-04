@@ -31,20 +31,24 @@ router.get('/', async (req, res) => {
       .select('address score totalTrades gasSpent pnl walletValue nativeBalance lastRoast lastSeen createdAt')
       .lean();
       
+    // Process wallets for response and ensure numeric fields are numbers
+    const wallets = leaderboard.map(wallet => {
+      return {
+        address: wallet.address,
+        score: Number(wallet.score) || 0,
+        totalTrades: Number(wallet.totalTrades) || 0,
+        gasSpent: Number(wallet.gasSpent) || 0,
+        pnl: Number(wallet.pnl) || 0,
+        walletValue: Number(wallet.walletValue) || 0,
+        nativeBalance: Number(wallet.nativeBalance) || 0,
+        lastRoast: wallet.lastRoast,
+        lastSeen: wallet.lastSeen
+      };
+    });
+    
     return res.json({
       success: true,
-      leaderboard: leaderboard.map(wallet => ({
-        address: wallet.address,
-        score: wallet.score,
-        totalTrades: wallet.totalTrades,
-        gasSpent: wallet.gasSpent,
-        pnl: wallet.pnl,
-        walletValue: wallet.walletValue,
-        nativeBalance: wallet.nativeBalance,
-        lastRoast: wallet.lastRoast,
-        lastSeen: wallet.lastSeen,
-        createdAt: wallet.createdAt
-      }))
+      leaderboard: wallets
     });
   } catch (error) {
     console.error('Error fetching leaderboard:', error);
@@ -98,10 +102,18 @@ router.get('/stats', async (req, res) => {
     // Get top wallet by PnL
     const topWalletByPnl = await Wallet.findOne().sort({ pnl: -1 }).select('address pnl');
     
-    // Format response
-    res.json({
-      ...stats[0],
-      _id: undefined,
+    // Convert string values to numbers for accurate stats
+    const result = {
+      totalWallets: stats[0].totalWallets || 0,
+      averageScore: Number(stats[0].averageScore) || 0,
+      totalPnl: Number(stats[0].totalPnl) || 0,
+      averagePnl: Number(stats[0].averagePnl) || 0,
+      totalGasSpent: Number(stats[0].totalGasSpent) || 0,
+      averageGasSpent: Number(stats[0].averageGasSpent) || 0,
+      totalTrades: Number(stats[0].totalTrades) || 0,
+      averageTrades: Number(stats[0].averageTrades) || 0,
+      totalWalletValue: Number(stats[0].totalWalletValue) || 0,
+      averageWalletValue: Number(stats[0].averageWalletValue) || 0,
       topWalletByScore: topWalletByScore ? {
         address: topWalletByScore.address,
         score: topWalletByScore.score
@@ -110,7 +122,9 @@ router.get('/stats', async (req, res) => {
         address: topWalletByPnl.address,
         pnl: topWalletByPnl.pnl
       } : null
-    });
+    };
+    
+    return res.json(result);
   } catch (error) {
     console.error('Error fetching leaderboard stats:', error);
     res.status(500).json({ error: 'Failed to fetch leaderboard stats', details: error.message });
