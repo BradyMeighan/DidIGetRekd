@@ -268,10 +268,13 @@ async function analyzeWallet(address, options = {}) {
     stats.solPrice = solPrice;
     
     // Generate a roast based on the stats
-    const roast = await generateRoast(address, stats);
+    const roast = await generateRoast(walletData);
     
     // Generate achievements
     const achievements = generateAchievements(walletData);
+    
+    // Save to leaderboard
+    await saveWalletToLeaderboard(address, walletData, stats, roast);
     
     return {
       stats,
@@ -899,236 +902,294 @@ function calculateScore(stats) {
   return Math.max(0, Math.min(100, Math.round(score)));
 }
 
+// Function to safely check if an object is a valid array
+function isValidArray(obj) {
+  return Array.isArray(obj) && obj !== null;
+}
+
 /**
  * Generate achievements based on wallet data
  * @param {Object} walletData - The wallet data
  * @returns {Array} List of achievements
  */
 function generateAchievements(walletData) {
-  const achievements = [];
-  
-  // Get the wallet age if we have transaction history
-  let walletAge = 0;
-  let activityGap = 0;
-  let consecutiveDays = 0;
-  
-  if (walletData.signatures && walletData.signatures.length > 0) {
-    try {
-      // Sort signatures by block time (oldest first)
-      const sortedSignatures = [...walletData.signatures].sort((a, b) => {
-        return a.blockTime - b.blockTime;
-      });
-      
-      // Calculate wallet age in days
-      const firstTxTime = new Date(sortedSignatures[0].blockTime * 1000);
-      const now = new Date();
-      walletAge = Math.floor((now - firstTxTime) / (1000 * 60 * 60 * 24));
-      
-      // Check for activity gaps
-      if (sortedSignatures.length > 1) {
-        let maxGap = 0;
-        for (let i = 1; i < sortedSignatures.length; i++) {
-          const gap = sortedSignatures[i].blockTime - sortedSignatures[i-1].blockTime;
-          const gapDays = Math.floor(gap / (60 * 60 * 24));
-          if (gapDays > maxGap) {
-            maxGap = gapDays;
-          }
-        }
-        activityGap = maxGap;
-        
-        // Check for consecutive days of activity
-        const txDates = sortedSignatures.map(sig => {
-          const date = new Date(sig.blockTime * 1000);
-          return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+  try {
+    const achievements = [];
+    
+    // Ensure walletData exists
+    if (!walletData) {
+      console.error('Cannot generate achievements: walletData is undefined');
+      return [];
+    }
+    
+    // Get the wallet age if we have transaction history
+    let walletAge = 0;
+    let activityGap = 0;
+    let consecutiveDays = 0;
+    
+    // Check if signatures is a valid array
+    if (isValidArray(walletData.signatures) && walletData.signatures.length > 0) {
+      try {
+        // Sort signatures by block time (oldest first)
+        const sortedSignatures = [...walletData.signatures].sort((a, b) => {
+          return a.blockTime - b.blockTime;
         });
         
-        // Count consecutive days
-        const uniqueDates = [...new Set(txDates)].sort();
-        let maxConsecutive = 1;
-        let current = 1;
+        // Calculate wallet age in days
+        const firstTxTime = new Date(sortedSignatures[0].blockTime * 1000);
+        const now = new Date();
+        walletAge = Math.floor((now - firstTxTime) / (1000 * 60 * 60 * 24));
         
-        for (let i = 1; i < uniqueDates.length; i++) {
-          const prevDate = new Date(uniqueDates[i-1]);
-          const currDate = new Date(uniqueDates[i]);
-          
-          const diffTime = Math.abs(currDate - prevDate);
-          const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-          
-          if (diffDays === 1) {
-            current++;
-            maxConsecutive = Math.max(maxConsecutive, current);
-          } else {
-            current = 1;
+        // Check for activity gaps
+        if (sortedSignatures.length > 1) {
+          let maxGap = 0;
+          for (let i = 1; i < sortedSignatures.length; i++) {
+            const gap = sortedSignatures[i].blockTime - sortedSignatures[i-1].blockTime;
+            const gapDays = Math.floor(gap / (60 * 60 * 24));
+            if (gapDays > maxGap) {
+              maxGap = gapDays;
+            }
           }
+          activityGap = maxGap;
+          
+          // Check for consecutive days of activity
+          const txDates = sortedSignatures.map(sig => {
+            const date = new Date(sig.blockTime * 1000);
+            return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+          });
+          
+          // Count consecutive days
+          const uniqueDates = [...new Set(txDates)].sort();
+          let maxConsecutive = 1;
+          let current = 1;
+          
+          for (let i = 1; i < uniqueDates.length; i++) {
+            const prevDate = new Date(uniqueDates[i-1]);
+            const currDate = new Date(uniqueDates[i]);
+            
+            const diffTime = Math.abs(currDate - prevDate);
+            const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+            
+            if (diffDays === 1) {
+              current++;
+              maxConsecutive = Math.max(maxConsecutive, current);
+            } else {
+              current = 1;
+            }
+          }
+          
+          consecutiveDays = maxConsecutive;
+        }
+      } catch (error) {
+        console.error('Error calculating wallet age:', error);
+      }
+    }
+    
+    // Account Age achievements
+    if (walletAge > 730) { // 2 years
+      achievements.push({ 
+        title: 'OG Wallet 🧓', 
+        description: 'Wallet age is over 2 years old'
+      });
+    } else if (walletAge < 30) {
+      achievements.push({ 
+        title: 'Fresh Wallet 👶', 
+        description: 'Wallet created in the last 30 days'
+      });
+    }
+    
+    // Activity achievements
+    if (activityGap > 180) { // 6 months
+      achievements.push({ 
+        title: 'Hibernator 💤', 
+        description: 'No transactions for 6+ months at some point'
+      });
+    }
+    
+    if (consecutiveDays >= 7) {
+      achievements.push({ 
+        title: 'Non-Stop 🔄', 
+        description: `Transactions ${consecutiveDays} days in a row`
+      });
+    }
+    
+    // Transaction count achievements
+    const txCount = walletData.totalTrades || 0;
+    
+    if (txCount > 100) {
+      achievements.push({ 
+        title: 'Degenerate Trader 🎰', 
+        description: `Made ${txCount} trades in total`
+      });
+    } else if (txCount > 50) {
+      achievements.push({ 
+        title: 'Active Trader 📊', 
+        description: `Made ${txCount} trades in total`
+      });
+    }
+    
+    // Gas fees achievements
+    const gasSpent = walletData.gasSpent || 0;
+    
+    if (gasSpent > 1) {
+      achievements.push({ 
+        title: 'Gas Guzzler 🔥', 
+        description: `Spent ${gasSpent.toFixed(2)} SOL on fees alone`
+      });
+    }
+    
+    if (txCount > 0 && gasSpent / txCount < 0.0001) {
+      achievements.push({ 
+        title: 'Penny Pincher 💰', 
+        description: 'Averaged less than 0.0001 SOL per transaction'
+      });
+    }
+    
+    // Wallet value achievements
+    const walletValue = parseFloat(walletData.walletValue || 0);
+    
+    if (walletValue > 10000) {
+      achievements.push({ 
+        title: 'Whale Alert 🐋', 
+        description: 'Wallet value exceeds $10,000'
+      });
+    } else if (walletValue < 100) {
+      achievements.push({ 
+        title: 'Shrimp 🦐', 
+        description: 'Wallet value under $100'
+      });
+    }
+    
+    // Token variety achievements
+    const tokenCount = isValidArray(walletData.tokens) ? walletData.tokens.length : 0;
+    
+    if (tokenCount > 10) {
+      achievements.push({ 
+        title: 'Token Collector 🪙', 
+        description: `Holds ${tokenCount} different tokens`
+      });
+    }
+    
+    // Check for meme tokens - ensure tokens is an array first
+    const memeTokens = ['BONK', 'SLERF', 'WIF', 'SNEK'];
+    let hasMultipleMemeTokens = false;
+    
+    if (isValidArray(walletData.tokens)) {
+      try {
+        const memeTokensFound = walletData.tokens.filter(token => 
+          token && token.name && memeTokens.some(meme => 
+            token.name.toString().toUpperCase().includes(meme)
+          )
+        );
+        hasMultipleMemeTokens = memeTokensFound.length >= 2;
+      } catch (error) {
+        console.error('Error checking for meme tokens:', error);
+        hasMultipleMemeTokens = false;
+      }
+    }
+    
+    if (hasMultipleMemeTokens) {
+      achievements.push({ 
+        title: 'Meme Lord 👑', 
+        description: 'Holds multiple meme tokens'
+      });
+    }
+    
+    // Portfolio balance achievements - ensure tokens is an array first
+    let solBalance = 0;
+    let hasStablecoins = false;
+    
+    if (isValidArray(walletData.tokens)) {
+      try {
+        // Find SOL token
+        const solToken = walletData.tokens.find(t => t && t.name === 'SOL');
+        if (solToken && solToken.amount) {
+          solBalance = parseFloat(solToken.amount) || 0;
         }
         
-        consecutiveDays = maxConsecutive;
+        // Check for stablecoins
+        const stablecoins = ['USDC', 'USDT', 'DAI', 'TUSD'];
+        hasStablecoins = walletData.tokens.some(token => 
+          token && token.name && stablecoins.some(stable => 
+            token.name.toString().toUpperCase().includes(stable)
+          )
+        );
+      } catch (error) {
+        console.error('Error checking token portfolio:', error);
       }
-    } catch (error) {
-      console.error('Error calculating wallet age:', error);
     }
+    
+    if (hasStablecoins) {
+      achievements.push({ 
+        title: 'Stablecoin Lover 💲', 
+        description: 'Holds stablecoins as part of portfolio'
+      });
+    }
+    
+    // Trading pattern achievements based on wallet score
+    const score = walletData.score || 50;
+    
+    if (score < 30) {
+      achievements.push({ 
+        title: 'Rug Victim 🫠', 
+        description: 'Bought high and sold low. Classic.'
+      });
+    } else if (score < 60) {
+      achievements.push({ 
+        title: 'Paper Hands 🧻', 
+        description: 'Selling at the first sign of trouble'
+      });
+    } else if (score < 90) {
+      achievements.push({ 
+        title: 'Diamond Hands 💎🙌', 
+        description: 'HODL is your middle name'
+      });
+    } else {
+      achievements.push({ 
+        title: 'Giga Chad Ape 🦍', 
+        description: 'The wolf of Solana Street'
+      });
+    }
+    
+    return achievements;
+  } catch (error) {
+    console.error('Error generating achievements:', error);
+    return [];
   }
-  
-  // Account Age achievements
-  if (walletAge > 730) { // 2 years
-    achievements.push({ 
-      title: 'OG Wallet 🧓', 
-      description: 'Wallet age is over 2 years old'
-    });
-  } else if (walletAge < 30) {
-    achievements.push({ 
-      title: 'Fresh Wallet 👶', 
-      description: 'Wallet created in the last 30 days'
-    });
-  }
-  
-  // Activity achievements
-  if (activityGap > 180) { // 6 months
-    achievements.push({ 
-      title: 'Hibernator 💤', 
-      description: 'No transactions for 6+ months at some point'
-    });
-  }
-  
-  if (consecutiveDays >= 7) {
-    achievements.push({ 
-      title: 'Non-Stop 🔄', 
-      description: `Transactions ${consecutiveDays} days in a row`
-    });
-  }
-  
-  // Transaction count achievements
-  const txCount = walletData.totalTrades || 0;
-  
-  if (txCount > 100) {
-    achievements.push({ 
-      title: 'Degenerate Trader 🎰', 
-      description: `Made ${txCount} trades in total`
-    });
-  } else if (txCount > 50) {
-    achievements.push({ 
-      title: 'Active Trader 📊', 
-      description: `Made ${txCount} trades in total`
-    });
-  }
-  
-  // Gas fees achievements
-  const gasSpent = walletData.gasSpent || 0;
-  
-  if (gasSpent > 1) {
-    achievements.push({ 
-      title: 'Gas Guzzler 🔥', 
-      description: `Spent ${gasSpent.toFixed(2)} SOL on fees alone`
-    });
-  }
-  
-  if (txCount > 0 && gasSpent / txCount < 0.0001) {
-    achievements.push({ 
-      title: 'Penny Pincher 💰', 
-      description: 'Averaged less than 0.0001 SOL per transaction'
-    });
-  }
-  
-  // Wallet value achievements
-  const walletValue = parseFloat(walletData.walletValue || 0);
-  
-  if (walletValue > 10000) {
-    achievements.push({ 
-      title: 'Whale Alert 🐋', 
-      description: 'Wallet value exceeds $10,000'
-    });
-  } else if (walletValue < 100) {
-    achievements.push({ 
-      title: 'Shrimp 🦐', 
-      description: 'Wallet value under $100'
-    });
-  }
-  
-  // Token variety achievements
-  const tokenCount = walletData.tokens ? walletData.tokens.length : 0;
-  
-  if (tokenCount > 10) {
-    achievements.push({ 
-      title: 'Token Collector 🪙', 
-      description: `Holds ${tokenCount} different tokens`
-    });
-  }
-  
-  // Check for meme tokens
-  const memeTokens = ['BONK', 'SLERF', 'WIF', 'SNEK'];
-  const hasMultipleMemeTokens = walletData.tokens ? 
-    walletData.tokens.filter(token => 
-      memeTokens.some(meme => 
-        token.name && token.name.toUpperCase().includes(meme)
-      )
-    ).length >= 2 : false;
-  
-  if (hasMultipleMemeTokens) {
-    achievements.push({ 
-      title: 'Meme Lord 👑', 
-      description: 'Holds multiple meme tokens'
-    });
-  }
-  
-  // Portfolio balance achievements
-  const solBalance = walletData.tokens ? 
-    walletData.tokens.find(t => t.name === 'SOL')?.amount || 0 : 0;
-  
-  const hasStablecoins = walletData.tokens ? 
-    walletData.tokens.some(token => 
-      token.name && ['USDC', 'USDT', 'DAI', 'TUSD'].includes(token.name.toUpperCase())
-    ) : false;
-  
-  if (hasStablecoins) {
-    achievements.push({ 
-      title: 'Stablecoin Lover 💲', 
-      description: 'Holds stablecoins as part of portfolio'
-    });
-  }
-  
-  // Trading pattern achievements based on wallet score
-  const score = walletData.score || 50;
-  
-  if (score < 30) {
-    achievements.push({ 
-      title: 'Rug Victim 🫠', 
-      description: 'Bought high and sold low. Classic.'
-    });
-  } else if (score < 60) {
-    achievements.push({ 
-      title: 'Paper Hands 🧻', 
-      description: 'Selling at the first sign of trouble'
-    });
-  } else if (score < 90) {
-    achievements.push({ 
-      title: 'Diamond Hands 💎🙌', 
-      description: 'HODL is your middle name'
-    });
-  } else {
-    achievements.push({ 
-      title: 'Giga Chad Ape 🦍', 
-      description: 'The wolf of Solana Street'
-    });
-  }
-  
-  return achievements;
 }
 
 /**
- * Generate a roast based on wallet statistics
+ * Generate a roast for a wallet based on its data
+ * @param {Object} walletData - The wallet data
+ * @returns {Promise<string>} The roast
  */
-async function generateRoast(address, stats) {
-  try {
-    if (!process.env.OPENAI_API_KEY) {
-      return getDefaultRoast(stats);
-    }
+async function generateRoast(walletData) {
+  const openaiApiKey = process.env.OPENAI_API_KEY;
+  
+  if (!openaiApiKey) {
+    console.log("OpenAI API key not set. Using fallback roast generator.");
     
+    // Array of generic roast messages
+    const fallbackRoasts = [
+      "This wallet is more mysterious than the Solana whitepaper - even I can't tell what's happening here.",
+      "Your wallet is too unique to roast properly. Is that a good thing? I'll let you decide.",
+      "I'd roast this wallet, but I'd need an API key for that. Consider this a lucky escape.",
+      "No roast available right now. Consider your wallet... un-roastable.",
+      "Unable to generate a personalized roast at this time. Your wallet remains un-judged... for now."
+    ];
+    
+    // Return a random roast from the fallback array
+    return fallbackRoasts[Math.floor(Math.random() * fallbackRoasts.length)];
+  }
+  
+  try {
     const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
+      apiKey: openaiApiKey
     });
     
-    // Convert stats to readable format for OpenAI
-    const walletPreview = address ? `${address.slice(0, 6)}...${address.slice(-4)}` : "Unknown";
+    // Convert data to readable format for OpenAI
+    const walletPreview = walletData.address ? `${walletData.address.slice(0, 6)}...${walletData.address.slice(-4)}` : "Unknown";
+    const stats = walletData.stats || {};
     const gasSpent = stats.gasSpent || "Unknown";
     const totalTrades = stats.totalTrades || 0;
     const successRate = stats.successRate || 0;
@@ -1153,34 +1214,9 @@ async function generateRoast(address, stats) {
     
     return response.choices[0].message.content.trim();
   } catch (error) {
-    console.error('Error generating roast:', error);
-    return getDefaultRoast(stats);
+    console.error("Error generating roast:", error);
+    return "Something went wrong while trying to roast your wallet. Maybe it's too hot to handle?";
   }
-}
-
-/**
- * Get a default roast when OpenAI is unavailable
- */
-function getDefaultRoast(stats) {
-  const roasts = [
-    `${stats.gasSpent} SOL spent on gas fees? You might as well have burned your money for warmth.`,
-    `A ${stats.successRate}% success rate? My toaster has a better success rate at making toast.`,
-    `${stats.totalTrades} transactions and what do you have to show for it? Not much, apparently.`,
-    `This wallet has more failed transactions than a beginner's cooking attempts.`,
-    `Congratulations on your ${stats.totalTrades} trades! Too bad quantity doesn't equal quality.`
-  ];
-  
-  // Try to pick a relevant roast based on stats
-  if (parseFloat(stats.gasSpent) > 1) {
-    return roasts[0];
-  } else if (stats.successRate < 80) {
-    return roasts[1];
-  } else if (stats.totalTrades > 50) {
-    return roasts[2];
-  }
-  
-  // Otherwise, pick a random one
-  return roasts[Math.floor(Math.random() * roasts.length)];
 }
 
 /**
@@ -1276,7 +1312,55 @@ function generateFakeData(address) {
   };
 }
 
+/**
+ * Save wallet data to leaderboard
+ * @param {string} address - Wallet address
+ * @param {Object} walletData - Wallet data
+ * @param {Object} stats - Wallet stats
+ * @param {string} roast - The generated roast
+ * @returns {Object} Leaderboard response
+ */
+async function saveWalletToLeaderboard(address, walletData, stats, roast) {
+  try {
+    const walletValue = isValidArray(walletData.tokens) ? 
+      walletData.tokens.reduce((sum, token) => {
+        // Only add if the token has price and amount
+        if (token && token.price && token.amount) {
+          return sum + (parseFloat(token.price) * parseFloat(token.amount));
+        }
+        return sum;
+      }, 0) : 0;
+
+    const leaderboardData = {
+      address,
+      score: stats.score || 0,
+      totalTrades: stats.totalTrades || 0,
+      gasSpent: stats.gasSpent || 0,
+      pnl: stats.pnl || 0,
+      walletValue,
+      lastRoast: roast
+    };
+
+    console.log('Saving to leaderboard:', leaderboardData);
+
+    // Get the API URL from environment or use default
+    const apiUrl = process.env.API_URL || 'http://localhost:3001/api';
+
+    const response = await axios.post(
+      `${apiUrl}/leaderboard/${address}/leaderboard`,
+      leaderboardData
+    );
+
+    return response.data;
+  } catch (error) {
+    console.error('Error saving to leaderboard:', error);
+    return { error: 'Failed to save to leaderboard' };
+  }
+}
+
 module.exports = {
   analyzeWallet,
+  generateAchievements,
+  saveWalletToLeaderboard,
   generateRoast
 }; 

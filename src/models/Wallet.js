@@ -5,48 +5,41 @@ const WalletSchema = new mongoose.Schema({
     type: String,
     required: true,
     unique: true,
-    trim: true
+    index: true
   },
   score: {
     type: Number,
-    required: true
-  },
-  pnl: {
-    type: Number,
-    required: true
+    default: 0
   },
   totalTrades: {
     type: Number,
-    required: true
+    default: 0
   },
   gasSpent: {
     type: Number,
-    required: true
+    default: 0
+  },
+  pnl: {
+    type: Number,
+    default: 0
   },
   walletValue: {
     type: Number,
     default: 0
   },
-  achievements: [{
-    title: String,
-    description: String
-  }],
-  roasts: [{
-    text: String,
-    createdAt: {
-      type: Date,
-      default: Date.now
-    }
-  }],
+  lastRoast: {
+    type: String,
+    default: ''
+  },
   createdAt: {
     type: Date,
     default: Date.now
   },
-  updatedAt: {
+  lastSeen: {
     type: Date,
     default: Date.now
   }
-});
+}, { timestamps: false });
 
 // Index for efficient leaderboard queries
 WalletSchema.index({ score: -1 });

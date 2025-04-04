@@ -9,80 +9,45 @@ const router = express.Router();
  */
 router.get('/', async (req, res) => {
   try {
-    const { sort = 'score', limit = 10, page = 1, search = null } = req.query;
+    // Get optional query parameters
+    const limit = parseInt(req.query.limit) || 10;
+    const sortBy = req.query.sortBy || 'score'; // Default sort by score
+    const sortDir = req.query.sortDir === 'asc' ? 1 : -1; // Default descending
     
-    console.log('Leaderboard query params:', { sort, limit, page, search });
-    
-    // Validate sort parameter
-    const validSortFields = ['score', 'pnl', 'totalTrades', 'walletValue', 'gasSpent'];
-    if (!validSortFields.includes(sort)) {
-      return res.status(400).json({ error: `Invalid sort parameter. Must be one of: ${validSortFields.join(', ')}` });
+    // Validate the sort field
+    const validSortFields = ['score', 'gasSpent', 'totalTrades', 'walletValue', 'lastSeen'];
+    if (!validSortFields.includes(sortBy)) {
+      return res.status(400).json({ error: 'Invalid sort field' });
     }
     
-    // Parse limit and page as integers
-    const parsedLimit = parseInt(limit, 10);
-    const parsedPage = parseInt(page, 10);
+    // Build the sort object
+    const sortObj = {};
+    sortObj[sortBy] = sortDir;
     
-    // Validate limit and page
-    if (isNaN(parsedLimit) || parsedLimit < 1 || parsedLimit > 100) {
-      return res.status(400).json({ error: 'Invalid limit parameter. Must be between 1 and 100.' });
-    }
-    
-    if (isNaN(parsedPage) || parsedPage < 1) {
-      return res.status(400).json({ error: 'Invalid page parameter. Must be a positive integer.' });
-    }
-    
-    // Calculate skip value for pagination
-    const skip = (parsedPage - 1) * parsedLimit;
-    
-    // Build query
-    let query = {};
-    
-    // Add search filter if provided
-    if (search) {
-      query.address = { $regex: search, $options: 'i' };
-    }
-    
-    console.log('MongoDB query:', JSON.stringify(query));
-    
-    // Get wallets sorted by the specified field
-    const wallets = await Wallet.find(query)
-      .sort({ [sort]: -1 }) // Sort in descending order
-      .skip(skip)
-      .limit(parsedLimit)
-      .select('address score pnl totalTrades gasSpent walletValue achievements roasts');
-    
-    console.log(`Found ${wallets.length} wallets matching query`);
-    
-    // Get total count for pagination
-    const total = await Wallet.countDocuments(query);
-    
-    console.log(`Total wallets in DB: ${total}`);
-    
-    // Format response
-    const leaderboard = wallets.map(wallet => ({
-      address: wallet.address,
-      score: wallet.score,
-      pnl: wallet.pnl,
-      totalTrades: wallet.totalTrades,
-      gasSpent: wallet.gasSpent,
-      walletValue: wallet.walletValue || 0,
-      achievements: wallet.achievements,
-      lastRoast: wallet.roasts[wallet.roasts.length - 1]?.text || null
-    }));
-    
-    res.json({
-      leaderboard,
-      pagination: {
-        total,
-        page: parsedPage,
-        limit: parsedLimit,
-        pages: Math.ceil(total / parsedLimit)
-      }
+    // Get the leaderboard data
+    const leaderboard = await Wallet.find({})
+      .sort(sortObj)
+      .limit(limit)
+      .select('address score totalTrades gasSpent pnl walletValue lastRoast lastSeen createdAt')
+      .lean();
+      
+    return res.json({
+      success: true,
+      leaderboard: leaderboard.map(wallet => ({
+        address: wallet.address,
+        score: wallet.score,
+        totalTrades: wallet.totalTrades,
+        gasSpent: wallet.gasSpent,
+        pnl: wallet.pnl,
+        walletValue: wallet.walletValue,
+        lastRoast: wallet.lastRoast,
+        lastSeen: wallet.lastSeen,
+        createdAt: wallet.createdAt
+      }))
     });
   } catch (error) {
     console.error('Error fetching leaderboard:', error);
-    res.status(500).json({ error: 'Failed to fetch leaderboard', details: error.message });
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
@@ -158,57 +123,56 @@ router.get('/stats', async (req, res) => {
 router.post('/:address/leaderboard', async (req, res) => {
   try {
     const { address } = req.params;
-    const { score, totalTrades, gasSpent, pnl, lastRoast } = req.body;
-    
-    console.log(`Adding/updating wallet ${address} to leaderboard`);
-    console.log('Leaderboard data:', req.body);
+    const { score, totalTrades, gasSpent, pnl, walletValue, lastRoast } = req.body;
     
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
     }
     
-    if (!score || typeof score !== 'number') {
-      return res.status(400).json({ error: 'Score is required and must be a number' });
+    // Create updateData object with the wallet's data
+    const updateData = {
+      address,
+      score: score || 0,
+      totalTrades: totalTrades || 0,
+      gasSpent: gasSpent || 0,
+      pnl: pnl || 0,
+      walletValue: walletValue || 0,
+      lastSeen: new Date()
+    };
+    
+    // Add lastRoast to roasts array if provided
+    if (lastRoast) {
+      updateData.lastRoast = lastRoast;
     }
     
-    // Create or update wallet in leaderboard
-    const wallet = await Wallet.findOneAndUpdate(
-      { address },
-      {
-        address,
-        score,
-        totalTrades: totalTrades || 0,
-        gasSpent: gasSpent || 0,
-        pnl: pnl || 0,
-        $push: lastRoast ? { 
-          roasts: { 
-            text: lastRoast, 
-            createdAt: new Date() 
-          } 
-        } : []
-      },
+    const result = await Wallet.findOneAndUpdate(
+      { address }, 
       { 
-        upsert: true, 
-        new: true,
-        setDefaultsOnInsert: true 
-      }
+        $set: updateData,
+        $setOnInsert: { createdAt: new Date() }
+      },
+      { upsert: true, new: true }
     );
     
-    console.log(`Wallet ${address} ${wallet.isNew ? 'added to' : 'updated in'} leaderboard`);
+    console.log(`Added wallet ${address} to leaderboard with score: ${score}`);
     
-    res.status(200).json({ 
-      message: 'Wallet added to leaderboard', 
+    return res.json({
+      success: true,
       wallet: {
-        address: wallet.address,
-        score: wallet.score,
-        totalTrades: wallet.totalTrades,
-        gasSpent: wallet.gasSpent,
-        pnl: wallet.pnl
+        address: result.address,
+        score: result.score,
+        totalTrades: result.totalTrades,
+        gasSpent: result.gasSpent,
+        pnl: result.pnl,
+        walletValue: result.walletValue,
+        lastRoast: result.lastRoast,
+        createdAt: result.createdAt,
+        lastSeen: result.lastSeen
       }
     });
   } catch (error) {
-    console.error('Error adding wallet to leaderboard:', error);
-    res.status(500).json({ error: 'Failed to add wallet to leaderboard', details: error.message });
+    console.error('Error saving to leaderboard:', error);
+    return res.status(500).json({ error: 'Server error' });
   }
 });
 
