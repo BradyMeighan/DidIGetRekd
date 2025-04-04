@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
     const sortDir = req.query.sortDir === 'asc' ? 1 : -1; // Default descending
     
     // Validate the sort field
-    const validSortFields = ['score', 'gasSpent', 'totalTrades', 'walletValue', 'lastSeen'];
+    const validSortFields = ['score', 'gasSpent', 'totalTrades', 'walletValue', 'lastSeen', 'nativeBalance'];
     if (!validSortFields.includes(sortBy)) {
       return res.status(400).json({ error: 'Invalid sort field' });
     }
@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     const leaderboard = await Wallet.find({})
       .sort(sortObj)
       .limit(limit)
-      .select('address score totalTrades gasSpent pnl walletValue lastRoast lastSeen createdAt')
+      .select('address score totalTrades gasSpent pnl walletValue nativeBalance lastRoast lastSeen createdAt')
       .lean();
       
     return res.json({
@@ -40,6 +40,7 @@ router.get('/', async (req, res) => {
         gasSpent: wallet.gasSpent,
         pnl: wallet.pnl,
         walletValue: wallet.walletValue,
+        nativeBalance: wallet.nativeBalance,
         lastRoast: wallet.lastRoast,
         lastSeen: wallet.lastSeen,
         createdAt: wallet.createdAt
@@ -165,6 +166,7 @@ router.post('/:address/leaderboard', async (req, res) => {
         gasSpent: result.gasSpent,
         pnl: result.pnl,
         walletValue: result.walletValue,
+        nativeBalance: result.nativeBalance,
         lastRoast: result.lastRoast,
         createdAt: result.createdAt,
         lastSeen: result.lastSeen

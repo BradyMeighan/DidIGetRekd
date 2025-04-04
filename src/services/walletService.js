@@ -1126,28 +1126,46 @@ function generateAchievements(walletData) {
       });
     }
     
-    // Trading pattern achievements based on wallet score
-    const score = walletData.score || 50;
+    // Trading pattern achievements based on wallet data
+    // Use more accurate checks for wallet patterns
+    let tradingPattern = '';
+    let tradingDescription = '';
     
-    if (score < 30) {
+    // Only assign achievements if there are actual transactions
+    if (txCount > 0) {
+      if (walletData.score < 30) {
+        tradingPattern = 'Rug Victim 🫠';
+        tradingDescription = 'Looks like you bought high and sold low. Classic.';
+      } else if (walletData.score < 60) {
+        tradingPattern = 'Paper Hands 🧻';
+        tradingDescription = 'Selling at the first sign of trouble';
+      } else if (walletData.score < 90) {
+        tradingPattern = 'Diamond Hands 💎🙌';
+        tradingDescription = 'HODL is your middle name';
+      } else {
+        tradingPattern = 'Giga Chad Ape 🦍';
+        tradingDescription = 'The wolf of Solana Street';
+      }
+      
       achievements.push({ 
-        title: 'Rug Victim 🫠', 
-        description: 'Bought high and sold low. Classic.'
+        title: tradingPattern, 
+        description: tradingDescription
       });
-    } else if (score < 60) {
+    }
+    
+    // Make sure we're not giving hibernator achievement incorrectly
+    if (activityGap > 180 && txCount > 5) { // Only if they actually have a history of transactions
       achievements.push({ 
-        title: 'Paper Hands 🧻', 
-        description: 'Selling at the first sign of trouble'
+        title: 'Hibernator 💤', 
+        description: 'No transactions for 6+ months at some point'
       });
-    } else if (score < 90) {
+    }
+    
+    // Make sure we only give transaction-based achievements if they actually have transactions
+    if (gasSpent > 1 && txCount > 5) {
       achievements.push({ 
-        title: 'Diamond Hands 💎🙌', 
-        description: 'HODL is your middle name'
-      });
-    } else {
-      achievements.push({ 
-        title: 'Giga Chad Ape 🦍', 
-        description: 'The wolf of Solana Street'
+        title: 'Gas Guzzler 🔥', 
+        description: `Spent ${gasSpent.toFixed(2)} SOL on fees alone`
       });
     }
     
@@ -1196,11 +1214,12 @@ async function generateRoast(walletData) {
     
     const prompt = `Generate a funny, sarcastic roast of this Solana wallet:
       - Address: ${walletPreview}
-      - Gas Spent: ${gasSpent} SOL
-      - Total Transactions: ${totalTrades}
-      - Success Rate: ${successRate}%
+      - SOL Balance: ${walletData.nativeBalance || stats.nativeBalance || "Unknown"} SOL
+      - Total Transactions: ${stats.totalTrades || walletData.totalTrades || 0}
+      - Success Rate: ${stats.successRate || 0}%
+      - Wallet Value: $${stats.walletValue || walletData.walletValue || 0}
       
-      The roast should be funny but not too mean, about 1-2 sentences, and include specific details from the wallet stats.`;
+      The roast should be funny and mean, about 1-2 sentences, and include ACCURATE details from the wallet stats. DO NOT claim the wallet is inactive if it has transactions. DO NOT claim the success rate is 0% unless it actually is.`;
       
     const response = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
@@ -1338,6 +1357,7 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
       gasSpent: stats.gasSpent || 0,
       pnl: stats.pnl || 0,
       walletValue,
+      nativeBalance: parseFloat(stats.nativeBalance || walletData.nativeBalance || 0),
       lastRoast: roast
     };
 

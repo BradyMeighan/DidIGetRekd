@@ -27,6 +27,10 @@ const WalletSchema = new mongoose.Schema({
     type: Number,
     default: 0
   },
+  nativeBalance: {
+    type: Number,
+    default: 0
+  },
   lastRoast: {
     type: String,
     default: ''
@@ -46,5 +50,6 @@ WalletSchema.index({ score: -1 });
 WalletSchema.index({ walletValue: -1 });
 WalletSchema.index({ totalTrades: -1 });
 WalletSchema.index({ gasSpent: -1 });
+WalletSchema.index({ nativeBalance: -1 });
 
 module.exports = mongoose.model('Wallet', WalletSchema); 
