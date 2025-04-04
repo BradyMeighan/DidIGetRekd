@@ -530,6 +530,7 @@ async function fetchWalletData(address) {
 function calculateWalletStats(walletData, solPrice = 100) {
   try {
     console.log('Calculating wallet stats from data:', Object.keys(walletData));
+    console.log(`Using SOL price from CoinGecko: $${solPrice}`);
     
     // Extract relevant data
     const address = walletData.address;
@@ -716,33 +717,10 @@ function calculateWalletStats(walletData, solPrice = 100) {
     // Generate transaction history data
     const txHistory = generateTransactionHistory(signatures, transactions);
     
-    // Calculate wallet value based on SOL price 
-    let walletValueUsd = 0;
-
-    // If stats.nativeBalance exists, calculate the value from it
-    if (stats.nativeBalance && solPrice) {
-      const solBalance = parseFloat(stats.nativeBalance);
-      walletValueUsd = solBalance * solPrice;
-      console.log(`Calculated value from stats: ${solBalance} SOL * $${solPrice} = $${walletValueUsd.toFixed(2)}`);
-    } 
-    // If walletData.nativeBalance exists, calculate from it as fallback
-    else if (walletData.nativeBalance && solPrice) {
-      const solBalance = parseFloat(walletData.nativeBalance);
-      walletValueUsd = solBalance * solPrice;
-      console.log(`Calculated value from walletData: ${solBalance} SOL * $${solPrice} = $${walletValueUsd.toFixed(2)}`);
-    }
-    // Use existing wallet value if calculation wasn't possible
-    else {
-      walletValueUsd = parseFloat(stats.walletValue || walletData.walletValue || 0);
-      console.log(`Using existing wallet value: $${walletValueUsd.toFixed(2)}`);
-    }
-
-    // Create summary stats for display
+    // Calculate wallet value using the SOL price from CoinGecko
     const portfolioValue = nativeBalance * solPrice;
     const portfolioValueFormatted = portfolioValue.toFixed(2);
-
-    // Use fresh calculation for accuracy
-    console.log(`Final portfolio value: ${nativeBalance} SOL * $${solPrice} = $${portfolioValueFormatted}`);
+    console.log(`Calculated wallet value: ${nativeBalance} SOL × $${solPrice} = $${portfolioValueFormatted}`);
 
     return {
       address: walletData.address || "unknown",
@@ -1097,18 +1075,19 @@ function generateAchievements(walletData) {
     }
     
     // Wallet value achievements in USD
-    // Calculate properly from SOL balance if not available
-    const solPrice = parseFloat(walletData.solPrice || 100);
     const nativeBalance = parseFloat(walletData.nativeBalance || 0);
-    let walletValueUsd = parseFloat(walletData.walletValue || 0);
+    const solPrice = parseFloat(walletData.solPrice || 100);
+    let walletValueUsd = 0;
 
-    // If walletValue is not set, calculate from native balance
-    if (walletValueUsd === 0 && nativeBalance > 0) {
+    // Calculate wallet value from SOL balance
+    if (nativeBalance > 0) {
       walletValueUsd = nativeBalance * solPrice;
+      console.log(`Achievement wallet value: ${nativeBalance} SOL × $${solPrice} = $${walletValueUsd.toFixed(2)}`);
+    } else if (walletData.walletValue) {
+      // Use pre-calculated value if available
+      walletValueUsd = parseFloat(walletData.walletValue);
+      console.log(`Using pre-calculated wallet value: $${walletValueUsd.toFixed(2)}`);
     }
-
-    console.log(`Wallet value for achievements calculation: $${walletValueUsd.toFixed(2)} (${nativeBalance} SOL × $${solPrice})`);
-    console.log(`Wallet achievement checks: > $10,000: ${walletValueUsd > 10000}, < $100: ${walletValueUsd < 100}`);
 
     if (walletValueUsd > 10000) {
       achievements.push({ 
@@ -1274,12 +1253,15 @@ async function generateRoast(walletData) {
     const totalTrades = parseInt(stats.totalTrades || walletData.totalTrades || 0);
     const successRate = parseInt(stats.successRate || walletData.successRate || 0);
     const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
+
+    // Get SOL price, with preference for the value fetched from CoinGecko
     const solPrice = parseFloat(stats.solPrice || walletData.solPrice || 100);
-    
+    console.log(`Using SOL price for roast: $${solPrice}`);
+
     // Calculate USD value directly from SOL balance for accuracy
     const walletValueUsd = nativeBalance * solPrice;
-    
-    console.log(`Generating roast with: ${nativeBalance} SOL * $${solPrice} = $${walletValueUsd.toFixed(2)}`);
+
+    console.log(`Generating roast with: ${nativeBalance} SOL × $${solPrice} = $${walletValueUsd.toFixed(2)}`);
     
     const prompt = `Generate a BRUTALLY SAVAGE, hilarious roast of this Solana wallet:
       - Address: ${walletPreview}
@@ -1427,30 +1409,20 @@ function generateFakeData(address) {
  */
 async function saveWalletToLeaderboard(address, walletData, stats, roast) {
   try {
-    console.log('Calculating wallet value for leaderboard...');
+    console.log('Saving wallet to leaderboard...');
     
-    // First try to use the pre-calculated wallet value from stats
+    // Get the SOL price from stats or use default
+    const solPrice = parseFloat(stats.solPrice || 100);
+    console.log(`Using SOL price: $${solPrice}`);
+    
+    // Use pre-calculated wallet value from stats
     let walletValue = parseFloat(stats.walletValue || 0);
     
-    // If no value from stats, calculate it
+    // If no pre-calculated value, calculate from native balance
     if (walletValue === 0) {
-      const solPrice = parseFloat(stats.solPrice || walletData.solPrice || 100);
-      const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
-      
-      // Start with native SOL value
+      const nativeBalance = parseFloat(stats.nativeBalance || 0);
       walletValue = nativeBalance * solPrice;
-      console.log(`Base wallet value from SOL: $${walletValue.toFixed(2)} (${nativeBalance} SOL × $${solPrice})`);
-      
-      // Add token values if available
-      if (isValidArray(walletData.tokens)) {
-        walletData.tokens.forEach(token => {
-          if (token && token.price && token.amount) {
-            const tokenValue = parseFloat(token.price) * parseFloat(token.amount);
-            console.log(`Token ${token.name}: ${token.amount} × $${token.price} = $${tokenValue.toFixed(2)}`);
-            walletValue += tokenValue;
-          }
-        });
-      }
+      console.log(`Calculated wallet value from native balance: ${nativeBalance} SOL * $${solPrice} = $${walletValue.toFixed(2)}`);
     }
     
     console.log(`Final wallet value for leaderboard: $${walletValue.toFixed(2)}`);
@@ -1462,7 +1434,7 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
       gasSpent: stats.gasSpent || 0,
       pnl: stats.pnl || 0,
       walletValue, // USD value
-      nativeBalance: parseFloat(stats.nativeBalance || walletData.nativeBalance || 0), // SOL balance
+      nativeBalance: parseFloat(stats.nativeBalance || 0), // SOL balance
       solPrice, // Store the SOL price used for calculations
       lastRoast: roast
     };
