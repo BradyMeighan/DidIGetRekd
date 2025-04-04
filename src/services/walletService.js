@@ -1326,13 +1326,12 @@ async function generateRoast(walletData, additionalStats = {}) {
 WALLET DATA:
 - SOL Balance: ${nativeBalance.toFixed(4)} SOL (worth $${walletValueUsd.toFixed(2)})
 - Total Transactions: ${totalTrades}
-- Success Rate: ${successRate}%
 
 KEEP IT 100 WITH THESE INSTRUCTIONS:
 - Talk like you from the hood - use slang like "no cap", "bussin", "fr fr", "on god", "drippy", etc.
 - Use ACTUAL wallet stats in your roast - don't make up fake numbers
 - This wallet got ${nativeBalance.toFixed(4)} SOL worth $${walletValueUsd.toFixed(2)}
-- This wallet made ${totalTrades} transactions with ${successRate}% success rate
+- This wallet made ${totalTrades} transactions
 - If they broke, flame them for it
 - If they got paper hands or panic sold, clown them
 - If they holding bags, roast them about it
@@ -1340,7 +1339,8 @@ KEEP IT 100 WITH THESE INSTRUCTIONS:
 - Keep it mad disrespectful but funny af
 
 THE ROAST SHOULD SOUND LIKE IT'S COMING FROM A STREET-SMART CRYPTO GANGSTA. 
-USE AUTHENTIC-SOUNDING STREET SLANG BUT MAKE SURE IT'S STILL UNDERSTANDABLE.`;
+USE AUTHENTIC-SOUNDING STREET SLANG BUT MAKE SURE IT'S STILL UNDERSTANDABLE.
+LIMIT RESPONSES TO 2-3 SENTENCES MAX.`;
     
     // Use the right model for better roasts 
     const response = await openai.chat.completions.create({
@@ -1348,11 +1348,11 @@ USE AUTHENTIC-SOUNDING STREET SLANG BUT MAKE SURE IT'S STILL UNDERSTANDABLE.`;
       messages: [
         { 
           role: "system", 
-          content: "You are ThugRoastGPT, a hardcore street-smart crypto roaster from the hood. You talk with raw street slang, use terms like 'no cap', 'fr fr', 'bussin', 'sus', etc. Your roasts are SAVAGE and use actual wallet data to flame people. You sound like a mix of a drill rapper and crypto trader. Keep your roasts short, disrespectful but hilariously accurate. NEVER break character."
+          content: "You are ThugRoastGPT, a hardcore street-smart crypto roaster from the hood. You talk with raw street slang, use terms like 'no cap', 'fr fr', 'bussin', 'sus', etc. Your roasts are SAVAGE and use actual wallet data to flame people. You sound like a mix of a drill rapper and crypto trader. Keep your roasts short, disrespectful but hilariously accurate. NEVER break character. LIMIT responses to 2-3 sentences MAXIMUM."
         },
         { role: "user", content: prompt }
       ],
-      max_tokens: 200,
+      max_tokens: 150,
       temperature: 1.0, // Maximum creativity
       top_p: 0.95, // Slightly constrained sampling
       frequency_penalty: 0.5, // Penalize repetition
