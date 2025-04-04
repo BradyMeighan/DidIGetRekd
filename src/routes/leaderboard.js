@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     const leaderboard = await Wallet.find({})
       .sort(sortObj)
       .limit(limit)
-      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen createdAt')
+      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen lastUpdated createdAt tokens achievements recentTransactions')
       .lean();
       
     // Process wallets for response and ensure numeric fields are numbers
@@ -43,7 +43,11 @@ router.get('/', async (req, res) => {
         nativeBalance: Number(wallet.nativeBalance) || 0,
         solPrice: Number(wallet.solPrice) || 100,
         lastRoast: wallet.lastRoast,
-        lastSeen: wallet.lastSeen
+        lastSeen: wallet.lastSeen,
+        lastUpdated: wallet.lastUpdated,
+        tokens: wallet.tokens || [],
+        achievements: wallet.achievements || [],
+        recentTransactions: wallet.recentTransactions || []
       };
     });
     
@@ -155,12 +159,26 @@ router.post('/:address/leaderboard', async (req, res) => {
       walletValue: walletValue || 0,
       nativeBalance: nativeBalance || 0,
       solPrice: solPrice || 0,
-      lastSeen: new Date()
+      lastSeen: new Date(),
+      lastUpdated: new Date()
     };
     
     // Add lastRoast to roasts array if provided
     if (lastRoast) {
       updateData.lastRoast = lastRoast;
+    }
+    
+    // Save additional wallet data if available
+    if (req.body.tokens && Array.isArray(req.body.tokens)) {
+      updateData.tokens = req.body.tokens;
+    }
+    
+    if (req.body.achievements && Array.isArray(req.body.achievements)) {
+      updateData.achievements = req.body.achievements;
+    }
+    
+    if (req.body.recentTransactions && Array.isArray(req.body.recentTransactions)) {
+      updateData.recentTransactions = req.body.recentTransactions;
     }
     
     const result = await Wallet.findOneAndUpdate(

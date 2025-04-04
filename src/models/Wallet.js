@@ -46,6 +46,22 @@ const WalletSchema = new mongoose.Schema({
   lastSeen: {
     type: Date,
     default: Date.now
+  },
+  lastUpdated: {
+    type: Date,
+    default: Date.now
+  },
+  tokens: {
+    type: Array,
+    default: []
+  },
+  achievements: {
+    type: Array,
+    default: []
+  },
+  recentTransactions: {
+    type: Array,
+    default: []
   }
 }, { timestamps: false });
 
@@ -55,5 +71,6 @@ WalletSchema.index({ walletValue: -1 });
 WalletSchema.index({ totalTrades: -1 });
 WalletSchema.index({ gasSpent: -1 });
 WalletSchema.index({ nativeBalance: -1 });
+WalletSchema.index({ lastUpdated: -1 });
 
 module.exports = mongoose.model('Wallet', WalletSchema); 
