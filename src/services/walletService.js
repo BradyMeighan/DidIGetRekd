@@ -86,33 +86,58 @@ async function fetchSolPrice() {
 }
 
 /**
- * Analyzes a wallet address and returns statistics
+ * Analyze a wallet address
  * @param {string} address - The wallet address to analyze
- * @param {Object} options - Additional options
- * @returns {Object} Wallet statistics
+ * @param {Object} options - Analysis options
+ * @returns {Object} Analysis results
  */
 async function analyzeWallet(address, options = {}) {
   try {
-    console.log(`Analyzing wallet: ${address} with options:`, options);
+    console.log(`Analyzing wallet: ${address}`);
+    console.log('Options:', options);
     
-    // Fetch current SOL price
-    const solPrice = await fetchSolPrice();
-    
-    // Check if we have the Helius API key
-    if (!process.env.HELIUS_API_KEY) {
-      console.log('HELIUS_API_KEY not set');
+    // Validate wallet address
+    if (!address || !isValidSolanaAddress(address)) {
+      console.error(`Invalid Solana address: ${address}`);
       return {
-        stats: {
-          address,
-          error: "API_KEY_MISSING",
-          message: "Helius API key is not configured"
-        },
-        roast: "Can't roast what I can't see. The Helius API key is missing."
+        error: 'INVALID_ADDRESS',
+        message: 'Invalid Solana address format',
+        address
       };
     }
     
-    // Get comprehensive wallet data
+    // Check if we have the Helius API key before fetching data
+    if (!process.env.HELIUS_API_KEY) {
+      console.log('HELIUS_API_KEY not set');
+      return {
+        error: "API_KEY_MISSING",
+        message: "Helius API key is not configured",
+        address
+      };
+    }
+    
+    // Fetch wallet data
     const walletData = await fetchWalletData(address);
+    
+    // Check if we got an error from the data fetching
+    if (walletData.error) {
+      console.error(`Error fetching wallet data: ${walletData.error}`);
+      
+      // Only use fake data in development
+      if (process.env.NODE_ENV === 'development') {
+        console.log('Generating fake data for development');
+        // Generate fake data for testing or when RPC has issues
+        return generateFakeData(address);
+      } else {
+        // In production, return the error
+        return walletData;
+      }
+    }
+    
+    // Fetch current SOL price
+    const solPrice = await fetchSolPrice();
+    console.log(`Current SOL price: $${solPrice}`);
+    
     console.log('Wallet data retrieved:', Object.keys(walletData));
     
     // If we've checked direct signatures but failed to find them, check via test endpoint
@@ -257,15 +282,28 @@ async function analyzeWallet(address, options = {}) {
   } catch (error) {
     console.error(`Error analyzing wallet ${address}:`, error);
     
-    return {
-      stats: {
-        address,
-        error: "ANALYSIS_ERROR",
-        message: error.message
-      },
-      roast: "Something went wrong analyzing this wallet. Maybe it's too embarrassed to show its transactions."
-    };
+    // Only use fake data in development
+    if (process.env.NODE_ENV === 'development') {
+      console.log('Generating fake data for development due to error');
+      return generateFakeData(address);
+    } else {
+      return {
+        error: 'ANALYSIS_ERROR',
+        message: error.message,
+        address
+      };
+    }
   }
+}
+
+/**
+ * Validate a Solana address
+ * @param {string} address - Address to validate
+ * @returns {boolean} Whether the address is valid
+ */
+function isValidSolanaAddress(address) {
+  // Basic validation - Solana addresses are 32-44 characters long and base58 encoded
+  return /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address);
 }
 
 /**
@@ -1092,6 +1130,99 @@ function getDefaultRoast(stats) {
   
   // Otherwise, pick a random one
   return roasts[Math.floor(Math.random() * roasts.length)];
+}
+
+/**
+ * Generate fake wallet data for testing or when errors occur
+ * @param {string} address - The wallet address
+ * @returns {Object} Fake wallet data
+ */
+function generateFakeData(address) {
+  console.log(`Generating fake data for ${address} (FOR DEVELOPMENT USE ONLY)`);
+  
+  // Use the address string to create deterministic but random-seeming data
+  const seed = address.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+  const random = (min, max) => {
+    const x = Math.sin(seed * 9999) * 10000;
+    const rand = x - Math.floor(x);
+    return Math.floor(rand * (max - min + 1)) + min;
+  };
+  
+  // Generate basic stats
+  const score = random(0, 100);
+  const nativeBalance = (random(1, 50) / 10).toFixed(4);
+  const solPrice = 125;
+  const walletValue = (parseFloat(nativeBalance) * solPrice).toFixed(2);
+  const totalTrades = random(10, 500);
+  const gasSpent = (random(5, 300) / 100).toFixed(2);
+  
+  // Transaction history - last 30 days
+  const txHistory = Array.from({ length: 30 }, (_, i) => ({
+    day: i + 1,
+    date: new Date(Date.now() - (29-i) * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+    value: random(-20, 30) / 10,
+    transactions: random(0, 15)
+  }));
+  
+  // Tokens
+  const tokens = [
+    { name: 'SOL', amount: nativeBalance, value: walletValue },
+    { name: 'BONK', amount: random(1000, 1000000), value: (random(10, 500) / 10).toFixed(2) },
+    { name: 'JUP', amount: random(10, 500), value: (random(20, 800) / 10).toFixed(2) },
+    { name: 'USDC', amount: random(10, 2000) / 10, value: (random(10, 2000) / 10).toFixed(2) }
+  ];
+  
+  // Achievements
+  const achievements = [];
+  if (score < 30) achievements.push({ title: 'Rug Victim 🫠', description: 'You bought high and sold low. Classic.' });
+  else if (score < 60) achievements.push({ title: 'Paper Hands 🧻', description: 'Selling at the first sign of trouble, huh?' });
+  else if (score < 90) achievements.push({ title: 'Diamond Hands 💎🙌', description: 'HODL is your middle name!' });
+  else achievements.push({ title: 'Crypto Wizard 🧙‍♂️', description: 'You have mastered the art of the trade!' });
+  
+  // Add more random achievements
+  const randomAchievements = [
+    { title: 'Gas Guzzler 🔥', description: `Spent ${gasSpent} SOL on gas fees alone!` },
+    { title: 'Busy Bee 🐝', description: `Made ${totalTrades} trades in total.` },
+    { title: 'Meme Lord 👑', description: 'HODLing those meme coins like a boss!' },
+    { title: 'Whale Alert 🐋', description: 'Your wallet value is impressive!' }
+  ];
+  
+  // Add 1-2 random achievements
+  const numRandomAchievements = random(1, 2);
+  for (let i = 0; i < numRandomAchievements; i++) {
+    const idx = random(0, randomAchievements.length - 1);
+    achievements.push(randomAchievements[idx]);
+    randomAchievements.splice(idx, 1);
+  }
+  
+  // Roast
+  const roasts = [
+    `You spent ${gasSpent} SOL on fees alone. The validators thank you for your service. 🫡`,
+    `Your portfolio looks like you let a hamster make your trading decisions. And the hamster was drunk. 🐹🍺`,
+    `Congratulations on buying every single local top and selling every bottom. That takes skill! 📉`,
+    `You call those diamond hands? More like cubic zirconia at best. 💎❌`,
+    `Your wallet has more rugs than a Persian carpet store. 🧿`,
+    `Your trading strategy seems to be "buy high, sell low" - classic! 📊`,
+    `I've seen better returns from a savings account in Zimbabwe. 🏦`
+  ];
+  
+  const roastIndex = random(0, roasts.length - 1);
+  
+  // Return fake data in the same format as the real data
+  return {
+    address,
+    score,
+    solPrice,
+    nativeBalance,
+    walletValue,
+    tokens,
+    achievements,
+    roast: roasts[roastIndex],
+    txHistory,
+    totalTrades,
+    gasSpent,
+    pnl: (random(-500, 1000) / 10).toFixed(2)
+  };
 }
 
 module.exports = {

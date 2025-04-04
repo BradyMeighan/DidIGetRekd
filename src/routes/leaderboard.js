@@ -9,7 +9,9 @@ const router = express.Router();
  */
 router.get('/', async (req, res) => {
   try {
-    const { sort = 'score', limit = 10, page = 1 } = req.query;
+    const { sort = 'score', limit = 10, page = 1, search = null } = req.query;
+    
+    console.log('Leaderboard query params:', { sort, limit, page, search });
     
     // Validate sort parameter
     const validSortFields = ['score', 'pnl', 'totalTrades', 'gasSpent'];
@@ -33,15 +35,29 @@ router.get('/', async (req, res) => {
     // Calculate skip value for pagination
     const skip = (parsedPage - 1) * parsedLimit;
     
+    // Build query
+    let query = {};
+    
+    // Add search filter if provided
+    if (search) {
+      query.address = { $regex: search, $options: 'i' };
+    }
+    
+    console.log('MongoDB query:', JSON.stringify(query));
+    
     // Get wallets sorted by the specified field
-    const wallets = await Wallet.find()
+    const wallets = await Wallet.find(query)
       .sort({ [sort]: -1 }) // Sort in descending order
       .skip(skip)
       .limit(parsedLimit)
       .select('address score pnl totalTrades gasSpent achievements roasts');
     
+    console.log(`Found ${wallets.length} wallets matching query`);
+    
     // Get total count for pagination
-    const total = await Wallet.countDocuments();
+    const total = await Wallet.countDocuments(query);
+    
+    console.log(`Total wallets in DB: ${total}`);
     
     // Format response
     const leaderboard = wallets.map(wallet => ({
@@ -127,6 +143,67 @@ router.get('/stats', async (req, res) => {
   } catch (error) {
     console.error('Error fetching leaderboard stats:', error);
     res.status(500).json({ error: 'Failed to fetch leaderboard stats', details: error.message });
+  }
+});
+
+/**
+ * POST /api/wallet/:address/leaderboard
+ * Add or update a wallet on the leaderboard
+ */
+router.post('/api/wallet/:address/leaderboard', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const { score, totalTrades, gasSpent, pnl, lastRoast } = req.body;
+    
+    console.log(`Adding/updating wallet ${address} to leaderboard`);
+    console.log('Leaderboard data:', req.body);
+    
+    if (!address) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+    
+    if (!score || typeof score !== 'number') {
+      return res.status(400).json({ error: 'Score is required and must be a number' });
+    }
+    
+    // Create or update wallet in leaderboard
+    const wallet = await Wallet.findOneAndUpdate(
+      { address },
+      {
+        address,
+        score,
+        totalTrades: totalTrades || 0,
+        gasSpent: gasSpent || 0,
+        pnl: pnl || 0,
+        $push: lastRoast ? { 
+          roasts: { 
+            text: lastRoast, 
+            createdAt: new Date() 
+          } 
+        } : []
+      },
+      { 
+        upsert: true, 
+        new: true,
+        setDefaultsOnInsert: true 
+      }
+    );
+    
+    console.log(`Wallet ${address} ${wallet.isNew ? 'added to' : 'updated in'} leaderboard`);
+    
+    res.status(200).json({ 
+      message: 'Wallet added to leaderboard', 
+      wallet: {
+        address: wallet.address,
+        score: wallet.score,
+        totalTrades: wallet.totalTrades,
+        gasSpent: wallet.gasSpent,
+        pnl: wallet.pnl
+      }
+    });
+  } catch (error) {
+    console.error('Error adding wallet to leaderboard:', error);
+    res.status(500).json({ error: 'Failed to add wallet to leaderboard', details: error.message });
   }
 });
 
