@@ -1075,19 +1075,13 @@ function generateAchievements(walletData) {
     }
     
     // Wallet value achievements in USD
-    const nativeBalance = parseFloat(walletData.nativeBalance || 0);
     const solPrice = parseFloat(walletData.solPrice || 100);
-    let walletValueUsd = 0;
+    const nativeBalance = parseFloat(walletData.nativeBalance || 0);
 
-    // Calculate wallet value from SOL balance
-    if (nativeBalance > 0) {
-      walletValueUsd = nativeBalance * solPrice;
-      console.log(`Achievement wallet value: ${nativeBalance} SOL × $${solPrice} = $${walletValueUsd.toFixed(2)}`);
-    } else if (walletData.walletValue) {
-      // Use pre-calculated value if available
-      walletValueUsd = parseFloat(walletData.walletValue);
-      console.log(`Using pre-calculated wallet value: $${walletValueUsd.toFixed(2)}`);
-    }
+    // Calculate wallet value directly from SOL balance × price
+    const walletValueUsd = nativeBalance * solPrice;
+
+    console.log(`Achievement wallet value calculation: ${nativeBalance} SOL × $${solPrice} = $${walletValueUsd.toFixed(2)}`);
 
     if (walletValueUsd > 10000) {
       achievements.push({ 
@@ -1245,60 +1239,97 @@ async function generateRoast(walletData) {
       apiKey: openaiApiKey
     });
     
-    // Convert data to readable format for OpenAI
-    const walletPreview = walletData.address ? `${walletData.address.slice(0, 6)}...${walletData.address.slice(-4)}` : "Unknown";
-    const stats = walletData.stats || {};
+    // First log what we're working with
+    console.log('Raw data for roast:', {
+      address: walletData.address?.substring(0, 10) + '...',
+      hasStats: !!walletData.stats,
+      statsKeys: walletData.stats ? Object.keys(walletData.stats) : []
+    });
     
-    // Extract exact values using parseFloat/parseInt for accuracy
+    // Safely extract the wallet address
+    const walletPreview = walletData.address ? `${walletData.address.slice(0, 6)}...${walletData.address.slice(-4)}` : "Unknown";
+    
+    // Extract data directly from walletData.stats if available
+    let stats;
+    if (walletData.stats && typeof walletData.stats === 'object') {
+      console.log('Using data from walletData.stats');
+      stats = walletData.stats;
+    } else {
+      console.log('Using data directly from walletData');
+      stats = walletData;
+    }
+    
+    // Extract all values, with explicit fallbacks
     const totalTrades = parseInt(stats.totalTrades || walletData.totalTrades || 0);
     const successRate = parseInt(stats.successRate || walletData.successRate || 0);
     const nativeBalance = parseFloat(stats.nativeBalance || walletData.nativeBalance || 0);
-
-    // Get SOL price, with preference for the value fetched from CoinGecko
-    const solPrice = parseFloat(stats.solPrice || walletData.solPrice || 100);
-    console.log(`Using SOL price for roast: $${solPrice}`);
-
-    // Calculate USD value directly from SOL balance for accuracy
+    
+    // Get SOL price directly from sources that have it
+    let solPrice;
+    if (stats.solPrice && !isNaN(parseFloat(stats.solPrice))) {
+      solPrice = parseFloat(stats.solPrice);
+      console.log(`Using SOL price from stats: $${solPrice}`);
+    } else if (walletData.solPrice && !isNaN(parseFloat(walletData.solPrice))) {
+      solPrice = parseFloat(walletData.solPrice);
+      console.log(`Using SOL price from walletData: $${solPrice}`);
+    } else {
+      // Fallback to cached price or default
+      const cachedPrice = solPriceCache.price;
+      solPrice = cachedPrice || 100;
+      console.log(`Using fallback SOL price: $${solPrice}`);
+    }
+    
+    // Calculate wallet value from native balance and SOL price
     const walletValueUsd = nativeBalance * solPrice;
+    
+    console.log('Roast data:', {
+      totalTrades,
+      successRate,
+      nativeBalance,
+      solPrice,
+      walletValueUsd: walletValueUsd.toFixed(2)
+    });
+    
+    // Create a thorough prompt for better roasts
+    const prompt = `Generate an ABSOLUTELY BRUTAL, yet genuinely funny roast of this crypto wallet:
 
-    console.log(`Generating roast with: ${nativeBalance} SOL × $${solPrice} = $${walletValueUsd.toFixed(2)}`);
+WALLET DATA:
+- SOL Balance: ${nativeBalance.toFixed(4)} SOL (worth $${walletValueUsd.toFixed(2)})
+- Total Transactions: ${totalTrades}
+- Success Rate: ${successRate}%
+
+BE THE MOST SAVAGELY FUNNY CRYPTO COMEDIAN YOU CAN BE:
+- Channel Dave Chappelle, Anthony Jeselnik, and crypto Twitter's finest haters
+- Use SPECIFIC details about this wallet (don't make up fake numbers)
+- Reference their exact SOL balance of ${nativeBalance.toFixed(4)} SOL
+- Reference their exact wallet value of $${walletValueUsd.toFixed(2)}
+- Reference their ${totalTrades} transactions and ${successRate}% success rate
+- Use crypto slang, memes, and references that crypto natives would laugh at
+- Add specific trading insults like "buying the top" or "selling the bottom"
+- Make this BRUTALLY personal but hilariously clever
+
+The best roast will be a devastating commentary on their wallet that would make crypto Twitter laugh out loud. BE UNFORGETTABLE AND SAVAGE.
+
+IMPORTANT: DO NOT generate a generic roast that could apply to any wallet - focus on their SPECIFIC stats and make it hit hard!`;
     
-    const prompt = `Generate a BRUTALLY SAVAGE, hilarious roast of this Solana wallet:
-      - Address: ${walletPreview}
-      - SOL Balance: ${nativeBalance.toFixed(4)} SOL
-      - Total Transactions: ${totalTrades}
-      - Success Rate: ${successRate}%
-      - Wallet Value: $${walletValueUsd.toFixed(2)}
-      
-      ROAST INSTRUCTIONS:
-      - Be SAVAGE, MEAN and BRUTAL - don't hold back!
-      - This is for crypto degenerates who want to laugh at their own wallets
-      - Use dark humor, sarcasm, and exaggeration for maximum comedy
-      - Include crypto slang and references (ngmi, degen, wen lambo, etc.)
-      - Make fun of their tiny balance, failed transactions, or poor trading choices
-      - BE RUTHLESS - the meaner the better!
-      
-      ACCURACY REQUIREMENTS:
-      - This wallet has ${totalTrades} transactions - use this exact number
-      - SOL balance is ${nativeBalance.toFixed(4)} SOL - use this exact value
-      - Wallet value is $${walletValueUsd.toFixed(2)} - use this exact dollar amount
-      - Success rate is ${successRate}% - use this exact percentage
-      
-      Create a savagely funny 1-2 sentence roast that will make people laugh at this wallet's poor life choices!`;
-    
+    // Use the right model for better roasts 
     const response = await openai.chat.completions.create({
-      model: "gpt-4o-mini", // Use 4o-mini for better humor and accuracy
+      model: "gpt-4o", // Use the best model for humor
       messages: [
         { 
           role: "system", 
-          content: "You are a brutally savage crypto roast generator that writes absolutely MERCILESS roasts about wallet data. You use dark humor, exaggeration, and creative insults to create memorable, laugh-out-loud roasts. You're the Don Rickles of crypto wallets."
+          content: "You are CryptoRoastGPT, the most savage, witty and hilarious crypto wallet roaster ever created. You combine the brutal honesty of a trading desk with the razor-sharp wit of the best stand-up comedians. Your roasts are SPECIFIC to each wallet, painfully accurate, and use actual wallet data to create devastating takedowns that even the wallet owner would laugh at."
         },
         { role: "user", content: prompt }
       ],
-      max_tokens: 150,
-      temperature: 1.0
+      max_tokens: 200,
+      temperature: 1.0, // Maximum creativity
+      top_p: 0.95, // Slightly constrained sampling
+      frequency_penalty: 0.5, // Penalize repetition
+      presence_penalty: 0.5 // Encourage diversity
     });
     
+    // Return the roast
     return response.choices[0].message.content.trim();
   } catch (error) {
     console.error("Error generating roast:", error);
@@ -1415,18 +1446,14 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
     const solPrice = parseFloat(stats.solPrice || 100);
     console.log(`Using SOL price: $${solPrice}`);
     
-    // Use pre-calculated wallet value from stats
-    let walletValue = parseFloat(stats.walletValue || 0);
+    // Get the native SOL balance
+    const nativeBalance = parseFloat(stats.nativeBalance || 0);
+    console.log(`Native SOL balance: ${nativeBalance}`);
     
-    // If no pre-calculated value, calculate from native balance
-    if (walletValue === 0) {
-      const nativeBalance = parseFloat(stats.nativeBalance || 0);
-      walletValue = nativeBalance * solPrice;
-      console.log(`Calculated wallet value from native balance: ${nativeBalance} SOL * $${solPrice} = $${walletValue.toFixed(2)}`);
-    }
+    // Calculate wallet value in USD
+    const walletValue = nativeBalance * solPrice;
+    console.log(`Calculated wallet value: ${nativeBalance} SOL * $${solPrice} = $${walletValue.toFixed(2)}`);
     
-    console.log(`Final wallet value for leaderboard: $${walletValue.toFixed(2)}`);
-
     const leaderboardData = {
       address,
       score: stats.score || 0,
@@ -1434,12 +1461,17 @@ async function saveWalletToLeaderboard(address, walletData, stats, roast) {
       gasSpent: stats.gasSpent || 0,
       pnl: stats.pnl || 0,
       walletValue, // USD value
-      nativeBalance: parseFloat(stats.nativeBalance || 0), // SOL balance
+      nativeBalance, // Raw SOL balance (not USD divided by price)
       solPrice, // Store the SOL price used for calculations
       lastRoast: roast
     };
 
-    console.log('Saving to leaderboard:', leaderboardData);
+    console.log('Saving to leaderboard:', {
+      address: leaderboardData.address,
+      walletValue: leaderboardData.walletValue,
+      nativeBalance: leaderboardData.nativeBalance,
+      solPrice: leaderboardData.solPrice
+    });
 
     // Get the API URL from environment or use default
     const apiUrl = process.env.API_URL || 'http://localhost:3001/api';
