@@ -22,12 +22,14 @@ async function analyzeWallet(address, options = {}) {
     
     // Check if we have the Helius API key
     if (!process.env.HELIUS_API_KEY) {
-      console.log('HELIUS_API_KEY not set, using mock data');
-      const mockData = generateMockData(address);
-      
+      console.log('HELIUS_API_KEY not set');
       return {
-        stats: mockData,
-        roast: await generateRoast(address, mockData)
+        stats: {
+          address,
+          error: "API_KEY_MISSING",
+          message: "Helius API key is not configured"
+        },
+        roast: "Can't roast what I can't see. The Helius API key is missing."
       };
     }
     
@@ -35,14 +37,61 @@ async function analyzeWallet(address, options = {}) {
     const walletData = await fetchWalletData(address);
     console.log('Wallet data retrieved:', Object.keys(walletData));
     
-    // If no meaningful data found, use mock data
-    if (!walletData || (!walletData.transactions?.length && !walletData.signatures?.length)) {
-      console.log(`No transactions or signatures found for wallet ${address}, using mock data`);
-      const mockData = generateMockData(address);
+    // Always include at least the basic wallet info
+    const baseStats = {
+      address,
+      nativeBalance: walletData.nativeBalance?.toFixed(4) || "0",
+      totalTrades: 0,
+      pnl: "Unknown",
+      gasSpent: "0",
+      successRate: 0,
+      error: null
+    };
+    
+    // If no transactions found, return error state with basic balance info
+    if (!walletData.signatures?.length && !walletData.transactions?.length) {
+      console.log(`No transactions found for wallet ${address}`);
+      
+      // Still add token accounts if available
+      const tokens = [];
+      
+      if (walletData.tokenAccounts?.length > 0) {
+        // Add native SOL balance
+        if (walletData.nativeBalance) {
+          tokens.push({ 
+            name: 'SOL', 
+            amount: walletData.nativeBalance.toFixed(4), 
+            value: (walletData.nativeBalance * 20).toFixed(2) // estimated value
+          });
+        }
+        
+        // Add token accounts
+        walletData.tokenAccounts.forEach(acct => {
+          if (acct.account?.data?.parsed?.info) {
+            const tokenInfo = acct.account.data.parsed.info;
+            const mint = tokenInfo.mint;
+            const tokenAmount = tokenInfo.tokenAmount;
+            
+            if (tokenAmount && tokenAmount.uiAmount > 0) {
+              tokens.push({
+                name: mint.slice(0, 4) + '...',
+                mint: mint,
+                amount: tokenAmount.uiAmount.toString(),
+                value: '?' // No price data
+              });
+            }
+          }
+        });
+      }
       
       return {
-        stats: mockData,
-        roast: await generateRoast(address, mockData)
+        stats: {
+          ...baseStats,
+          tokens,
+          error: "NO_TRANSACTIONS",
+          message: "No transactions found for this wallet"
+        },
+        roast: "This wallet is so inactive it makes a ghost town look busy. No transactions found!"
       };
     }
     
@@ -62,11 +111,13 @@ async function analyzeWallet(address, options = {}) {
   } catch (error) {
     console.error(`Error analyzing wallet ${address}:`, error);
     
-    // Fallback to mock data
-    const mockData = generateMockData(address);
     return {
-      stats: mockData,
-      roast: await generateRoast(address, mockData)
+      stats: {
+        address,
+        error: "ANALYSIS_ERROR",
+        message: error.message
+      },
+      roast: "Something went wrong analyzing this wallet. Maybe it's too embarrassed to show its transactions."
     };
   }
 }
@@ -80,7 +131,7 @@ async function fetchWalletData(address) {
   try {
     const apiKey = process.env.HELIUS_API_KEY;
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
-    const walletData = {};
+    const walletData = { address };
     
     // 1. Get SOL balance
     console.log('Fetching SOL balance...');
@@ -95,6 +146,8 @@ async function fetchWalletData(address) {
       // Convert lamports to SOL (1 SOL = 1,000,000,000 lamports)
       walletData.nativeBalance = balanceResponse.data.result.value / 1000000000;
       console.log(`Native SOL balance: ${walletData.nativeBalance} SOL`);
+    } else {
+      console.log('No SOL balance found or error in response:', balanceResponse.data);
     }
     
     // 2. Get token accounts
@@ -113,6 +166,13 @@ async function fetchWalletData(address) {
     if (tokenResponse.data?.result?.value) {
       walletData.tokenAccounts = tokenResponse.data.result.value;
       console.log(`Found ${walletData.tokenAccounts.length} token accounts`);
+      
+      // Log the first token account for debugging
+      if (walletData.tokenAccounts.length > 0) {
+        console.log('Sample token account:', JSON.stringify(walletData.tokenAccounts[0]?.account?.data?.parsed?.info || {}, null, 2));
+      }
+    } else {
+      console.log('No token accounts found or error in response:', tokenResponse.data);
     }
     
     // 3. Get transaction signatures (more reliable than transactions endpoint)
@@ -124,7 +184,7 @@ async function fetchWalletData(address) {
       params: [address, { limit: 50 }]
     });
     
-    if (signaturesResponse.data?.result) {
+    if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
       walletData.signatures = signaturesResponse.data.result;
       console.log(`Found ${walletData.signatures.length} transaction signatures`);
       
@@ -162,6 +222,11 @@ async function fetchWalletData(address) {
       }
       
       console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
+    } else {
+      console.log('No transaction signatures found. Trying alternative endpoint...');
+      
+      // Log the signature response for debugging
+      console.log('Signature response:', JSON.stringify(signaturesResponse.data || {}, null, 2));
     }
     
     // 4. If we couldn't get transaction details via RPC, try Helius transactions endpoint
@@ -170,16 +235,19 @@ async function fetchWalletData(address) {
       const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=20`;
       const txResponse = await axios.get(txUrl);
       
-      if (txResponse.data?.transactions) {
+      if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
         walletData.transactions = txResponse.data.transactions;
         console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
+      } else {
+        console.log('No transactions found from Helius transactions endpoint either.');
+        console.log('Helius transactions response:', JSON.stringify(txResponse.data || {}, null, 2));
       }
     }
     
     return walletData;
   } catch (error) {
     console.error('Error fetching wallet data:', error.message);
-    return {};
+    return { error: error.message };
   }
 }
 
@@ -190,10 +258,6 @@ async function fetchWalletData(address) {
  */
 function calculateWalletStats(walletData) {
   console.log('Calculating wallet stats from data:', Object.keys(walletData));
-  
-  if (!walletData || (!walletData.transactions?.length && !walletData.signatures?.length)) {
-    return generateMockData();
-  }
   
   try {
     // Use signatures for count and timestamps if available
@@ -257,8 +321,8 @@ function calculateWalletStats(walletData) {
       lastActivityDate = sortedTxs[0].timestamp || new Date().toISOString();
       firstActivityDate = sortedTxs[sortedTxs.length - 1].timestamp || new Date().toISOString();
     } else {
-      firstActivityDate = new Date().toISOString();
-      lastActivityDate = new Date().toISOString();
+      firstActivityDate = null;
+      lastActivityDate = null;
     }
     
     // Calculate success rate
@@ -279,7 +343,7 @@ function calculateWalletStats(walletData) {
     // Generate transaction history
     const txHistory = generateTxHistory(signatures, transactions);
     
-    // Generate token holdings
+    // Generate token holdings - start with SOL which is always accurate
     const tokens = [
       // SOL balance is reliable
       { name: 'SOL', amount: nativeBalance.toFixed(4), value: (nativeBalance * 20).toFixed(2) } // use $20 as example price
@@ -287,28 +351,47 @@ function calculateWalletStats(walletData) {
     
     // Add token accounts if available
     if (walletData.tokenAccounts && walletData.tokenAccounts.length > 0) {
+      console.log(`Processing ${walletData.tokenAccounts.length} token accounts for display`);
+      
       // Process token accounts to add to the tokens array
-      walletData.tokenAccounts.forEach(acct => {
-        if (acct.account?.data?.parsed?.info) {
-          const tokenInfo = acct.account.data.parsed.info;
-          const mint = tokenInfo.mint;
-          const tokenAmount = tokenInfo.tokenAmount;
-          
-          if (tokenAmount && tokenAmount.uiAmount > 0) {
-            tokens.push({
-              name: mint.slice(0, 4) + '...',  // Use first few chars of mint address
-              amount: tokenAmount.uiAmount.toString(),
-              value: '?' // We don't have price data
+      walletData.tokenAccounts.forEach((acct, index) => {
+        try {
+          if (acct.account?.data?.parsed?.info) {
+            const tokenInfo = acct.account.data.parsed.info;
+            const mint = tokenInfo.mint;
+            const tokenAmount = tokenInfo.tokenAmount;
+            
+            // More detailed logging
+            console.log(`Token account ${index}:`, {
+              mint: mint,
+              decimals: tokenAmount?.decimals,
+              uiAmount: tokenAmount?.uiAmount,
+              uiAmountString: tokenAmount?.uiAmountString
             });
+            
+            if (tokenAmount && parseFloat(tokenAmount.uiAmount) > 0) {
+              // Use different naming strategies based on what we have
+              let tokenName = mint.slice(0, 4) + '...';
+              
+              // Log the mint address for reference
+              console.log(`Adding token with mint: ${mint} and amount: ${tokenAmount.uiAmount}`);
+              
+              tokens.push({
+                name: tokenName,
+                mint: mint,
+                amount: tokenAmount.uiAmountString || tokenAmount.uiAmount.toString(),
+                value: '?', // We don't have price data
+                decimals: tokenAmount.decimals
+              });
+            } else {
+              console.log(`Skipping zero balance token: ${mint}`);
+            }
           }
+        } catch (err) {
+          console.error(`Error processing token account ${index}:`, err.message);
         }
       });
     }
-    
-    // Generate NFT placeholder (we don't have reliable NFT data)
-    const nfts = [
-      { name: 'NFT Collection', floor: 0, owned: walletData.tokenAccounts?.length > 5 ? 1 : 0 }
-    ];
     
     // Generate achievements
     const achievements = generateAchievements({
@@ -334,17 +417,24 @@ function calculateWalletStats(walletData) {
       failedTxCount,
       firstActivityDate,
       lastActivityDate,
-      score,
+      score: totalTrades > 0 ? score : null,
       // Visualization data
       txHistory,
       tokens,
-      nfts,
-      achievements
+      // No NFT data - remove fake data
+      achievements: totalTrades > 0 ? achievements : []
     };
   } catch (error) {
     console.error('Error calculating wallet stats:', error);
     console.error(error.stack);
-    return generateMockData();
+    
+    // Return basic information with error
+    return {
+      address: walletData.address || "unknown",
+      nativeBalance: walletData.nativeBalance?.toFixed(4) || "0",
+      error: "CALCULATION_ERROR",
+      message: error.message
+    };
   }
 }
 
@@ -524,81 +614,6 @@ function generateAchievements({ score, totalTrades, successRate, totalGasSpent, 
   }
   
   return achievements;
-}
-
-/**
- * Generates mock wallet data for testing
- */
-function generateMockData(address) {
-  const totalTrades = Math.floor(Math.random() * 50) + 5;
-  const failedTxCount = Math.floor(totalTrades * Math.random() * 0.4);
-  const successRate = totalTrades > 0 ? Math.round(((totalTrades - failedTxCount) / totalTrades) * 100) : 0;
-  const gasSpent = (Math.random() * 0.5 + 0.05).toFixed(4);
-  const avgGasPerTx = (parseFloat(gasSpent) / Math.max(1, totalTrades)).toFixed(6);
-  
-  // Generate transaction history for the last 30 days
-  const txHistory = [];
-  for (let i = 0; i < 30; i++) {
-    txHistory.push({
-      day: i + 1,
-      value: (Math.random() * 2 - 1).toFixed(1),
-      transactions: Math.floor(Math.random() * 5)
-    });
-  }
-  
-  // Generate token holdings
-  const tokens = [
-    { name: 'SOL', amount: Math.random() * 5 + 0.5, value: (Math.random() * 200 + 50).toFixed(2) },
-    { name: 'BONK', amount: Math.random() * 100000 + 1000, value: (Math.random() * 50 + 10).toFixed(2) },
-    { name: 'JUP', amount: Math.random() * 50 + 5, value: (Math.random() * 100 + 20).toFixed(2) }
-  ];
-  
-  // Generate NFT holdings
-  const nfts = [
-    { name: 'DeGods', floor: 120, owned: Math.random() > 0.7 ? 1 : 0 },
-    { name: 'Okay Bears', floor: 80, owned: Math.random() > 0.6 ? 1 : 0 },
-    { name: 'Froganas', floor: 30, owned: Math.random() > 0.5 ? 1 : 0 }
-  ];
-  
-  // Calculate score
-  const score = calculateScore({
-    totalTrades,
-    successRate,
-    avgGasPerTx: parseFloat(avgGasPerTx),
-    transfersCount: Math.floor(totalTrades * 0.7),
-    swapCount: Math.floor(totalTrades * 0.2),
-    mintCount: Math.floor(totalTrades * 0.1)
-  });
-  
-  // Generate achievements
-  const achievements = generateAchievements({
-    score,
-    totalTrades,
-    successRate,
-    totalGasSpent: parseFloat(gasSpent),
-    swapCount: Math.floor(totalTrades * 0.2)
-  });
-  
-  return {
-    address: address || "unknown",
-    totalTrades,
-    pnl: (Math.random() * 10 - 5).toFixed(2),
-    gasSpent,
-    successRate,
-    avgGasPerTx,
-    transfersCount: Math.floor(totalTrades * 0.7),
-    swapCount: Math.floor(totalTrades * 0.2),
-    mintCount: Math.floor(totalTrades * 0.1),
-    failedTxCount,
-    firstActivityDate: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString(),
-    lastActivityDate: new Date().toISOString(),
-    score,
-    // Visualization data
-    txHistory,
-    tokens,
-    nfts,
-    achievements
-  };
 }
 
 /**

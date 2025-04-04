@@ -41,90 +41,66 @@ router.get('/:address', async (req, res) => {
     const result = await walletService.analyzeWallet(address);
     console.log(`Analysis complete for wallet: ${address}`);
     
-    // Ensure we have a complete data structure
-    if (!result.stats) {
-      result.stats = {};
+    // If there's an error in the stats, keep it but don't add visualization data
+    if (result.stats.error) {
+      console.log(`Error during wallet analysis: ${result.stats.error} - ${result.stats.message}`);
+      return res.json(result);
     }
     
-    // Generate visualization data if it doesn't exist
+    // Ensure we have a complete data structure
+    if (!result.stats) {
+      result.stats = {
+        address,
+        error: "EMPTY_RESULT",
+        message: "No wallet statistics were generated"
+      };
+      return res.json(result);
+    }
+    
+    // Generate transaction history if it doesn't exist
     if (!result.stats.txHistory) {
-      console.log('Generating transaction history visualization data');
+      console.log('No transaction history found, creating empty chart data');
       result.stats.txHistory = Array(30).fill().map((_, i) => ({
         day: i + 1,
-        value: parseFloat((Math.random() * 2 - 1).toFixed(1)),
-        transactions: Math.floor(Math.random() * 5)
+        value: 0,
+        transactions: 0
       }));
     }
     
+    // If tokens array doesn't exist, create empty one
     if (!result.stats.tokens) {
-      console.log('Generating token holdings visualization data');
-      result.stats.tokens = [
-        { name: 'SOL', amount: Math.max(0.1, result.stats.totalTrades / 10), value: (result.stats.totalTrades * 5).toFixed(2) },
-        { name: 'BONK', amount: result.stats.swapCount * 10000 || 5000, value: (result.stats.swapCount * 2 || 10).toFixed(2) },
-        { name: 'JUP', amount: result.stats.swapCount * 5 || 25, value: (result.stats.swapCount * 8 || 40).toFixed(2) }
-      ];
+      console.log('No token data found');
+      result.stats.tokens = [];
+      
+      // If we at least have native balance, add SOL
+      if (result.stats.nativeBalance) {
+        const nativeBalance = parseFloat(result.stats.nativeBalance);
+        result.stats.tokens.push({
+          name: 'SOL',
+          amount: nativeBalance.toFixed(4),
+          value: (nativeBalance * 20).toFixed(2) // estimated value
+        });
+      }
     }
     
-    if (!result.stats.nfts) {
-      console.log('Generating NFT holdings visualization data');
-      const mintCount = result.stats.mintCount || 0;
-      result.stats.nfts = [
-        { name: 'DeGods', floor: 120, owned: mintCount > 5 ? 1 : 0 },
-        { name: 'Okay Bears', floor: 80, owned: mintCount > 2 ? 1 : 0 },
-        { name: 'Froganas', floor: 30, owned: mintCount > 0 ? 2 : 0 }
-      ];
-    }
-    
+    // If achievements array doesn't exist, create empty one
     if (!result.stats.achievements) {
-      console.log('Generating achievements visualization data');
-      const achievements = [];
-      const score = result.stats.score || 50;
-      
-      // Score-based achievements
-      if (score < 30) {
-        achievements.push({ 
-          title: 'Rug Victim 🫠', 
-          description: 'You bought high and sold low. Classic.' 
-        });
-      } else if (score < 60) {
-        achievements.push({ 
-          title: 'Paper Hands 🧻', 
-          description: 'Selling at the first sign of trouble, huh?' 
-        });
-      } else if (score < 90) {
-        achievements.push({ 
-          title: 'Diamond Hands 💎🙌', 
-          description: 'HODL is your middle name.' 
-        });
-      } else {
-        achievements.push({ 
-          title: 'Giga Chad Ape 🦍', 
-          description: 'The wolf of Solana Street.' 
-        });
-      }
-      
-      // Add activity-based achievements
-      if (result.stats.gasSpent > 1.5) {
-        achievements.push({ 
-          title: 'Gas Guzzler 🛢️', 
-          description: 'Funding validators one tx at a time.' 
-        });
-      }
-      
-      if (result.stats.totalTrades > 100) {
-        achievements.push({ 
-          title: 'Degenerate Trader 🎰', 
-          description: 'Sleep? Who needs that?' 
-        });
-      }
-      
-      result.stats.achievements = achievements;
+      console.log('No achievements data found');
+      result.stats.achievements = [];
     }
     
     res.json(result);
   } catch (error) {
     console.error('Error analyzing wallet:', error);
-    res.status(500).json({ error: 'Error analyzing wallet' });
+    res.status(500).json({ 
+      error: 'Error analyzing wallet',
+      message: error.message,
+      stats: {
+        address: req.params.address,
+        error: "SERVER_ERROR",
+        message: "Server error occurred during analysis"
+      }
+    });
   }
 });
 
@@ -331,6 +307,289 @@ router.get('/helius-test/:address', async (req, res) => {
       error: 'Error testing Helius API', 
       message: error.message,
       stack: error.stack
+    });
+  }
+});
+
+/**
+ * @route GET /api/wallet/transactions-test/:address
+ * @desc Test endpoint to check multiple methods for fetching transaction history
+ */
+router.get('/transactions-test/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    console.log(`Testing transaction history methods for wallet: ${address}`);
+    
+    // Check API key
+    const heliusApiKey = process.env.HELIUS_API_KEY;
+    if (!heliusApiKey) {
+      return res.status(400).json({ error: 'HELIUS_API_KEY not set in environment variables' });
+    }
+    
+    const results = {
+      address,
+      methods: {}
+    };
+    
+    // Try Method 1: Standard Helius transactions endpoint
+    try {
+      console.log('METHOD 1: Testing Helius transactions endpoint');
+      const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${heliusApiKey}&limit=50`;
+      const txResponse = await axios.get(txUrl);
+      
+      results.methods.heliusTransactions = {
+        success: true,
+        transactionCount: txResponse.data.transactions?.length || 0,
+        sample: txResponse.data.transactions?.slice(0, 2) || [],
+        hasData: (txResponse.data.transactions?.length || 0) > 0
+      };
+    } catch (error) {
+      results.methods.heliusTransactions = {
+        success: false,
+        error: error.message
+      };
+    }
+    
+    // Try Method 2: Helius RPC getSignaturesForAddress (most reliable)
+    try {
+      console.log('METHOD 2: Testing getSignaturesForAddress RPC method');
+      const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+      const signaturesResponse = await axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getSignaturesForAddress",
+        params: [address, { limit: 50 }]
+      });
+      
+      results.methods.getSignaturesForAddress = {
+        success: true,
+        signatureCount: signaturesResponse.data.result?.length || 0,
+        sample: signaturesResponse.data.result?.slice(0, 2) || [],
+        hasData: (signaturesResponse.data.result?.length || 0) > 0
+      };
+      
+      // If we have signatures, try to get a transaction detail
+      if (signaturesResponse.data.result?.length > 0) {
+        const firstSig = signaturesResponse.data.result[0].signature;
+        
+        // Get transaction details
+        const txDetailResponse = await axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "getTransaction",
+          params: [firstSig, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
+        });
+        
+        results.methods.getSignaturesForAddress.txDetail = {
+          success: !!txDetailResponse.data.result,
+          sample: txDetailResponse.data.result ? txDetailResponse.data.result : null
+        };
+      }
+    } catch (error) {
+      results.methods.getSignaturesForAddress = {
+        success: false,
+        error: error.message
+      };
+    }
+    
+    // Try Method 3: getConfirmedSignaturesForAddress2 (older method)
+    try {
+      console.log('METHOD 3: Testing getConfirmedSignaturesForAddress2 RPC method');
+      const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+      const olderSigResponse = await axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "getConfirmedSignaturesForAddress2",
+        params: [address, { limit: 50 }]
+      });
+      
+      results.methods.getConfirmedSignaturesForAddress2 = {
+        success: true,
+        signatureCount: olderSigResponse.data.result?.length || 0,
+        sample: olderSigResponse.data.result?.slice(0, 2) || [],
+        hasData: (olderSigResponse.data.result?.length || 0) > 0
+      };
+    } catch (error) {
+      results.methods.getConfirmedSignaturesForAddress2 = {
+        success: false,
+        error: error.message
+      };
+    }
+    
+    // Try Method 4: getParsedTransactionWithConfig
+    if (results.methods.getSignaturesForAddress?.hasData) {
+      try {
+        console.log('METHOD 4: Testing getParsedTransactionWithConfig RPC method');
+        const firstSig = results.methods.getSignaturesForAddress.sample[0].signature;
+        const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+        
+        const parsedTxResponse = await axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 5,
+          method: "getParsedTransaction",
+          params: [
+            firstSig,
+            { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+          ]
+        });
+        
+        results.methods.getParsedTransaction = {
+          success: true,
+          hasData: !!parsedTxResponse.data.result,
+          sample: parsedTxResponse.data.result
+        };
+      } catch (error) {
+        results.methods.getParsedTransaction = {
+          success: false,
+          error: error.message
+        };
+      }
+    }
+    
+    // Check for account activity using getAccountInfo
+    try {
+      console.log('Checking account info');
+      const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+      const accountResponse = await axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 6,
+        method: "getAccountInfo",
+        params: [address, { encoding: "jsonParsed" }]
+      });
+      
+      results.accountInfo = {
+        success: true,
+        exists: !!accountResponse.data.result?.value,
+        executable: accountResponse.data.result?.value?.executable || false,
+        lamports: accountResponse.data.result?.value?.lamports || 0,
+        owner: accountResponse.data.result?.value?.owner || null,
+        rentEpoch: accountResponse.data.result?.value?.rentEpoch || 0
+      };
+    } catch (error) {
+      results.accountInfo = {
+        success: false,
+        error: error.message
+      };
+    }
+    
+    // Final assessment
+    const anyMethodHasTransactions = 
+      results.methods.heliusTransactions?.hasData ||
+      results.methods.getSignaturesForAddress?.hasData ||
+      results.methods.getConfirmedSignaturesForAddress2?.hasData;
+    
+    results.assessment = {
+      hasTransactions: anyMethodHasTransactions,
+      accountExists: results.accountInfo?.exists || false,
+      bestMethod: anyMethodHasTransactions ? 
+        (results.methods.getSignaturesForAddress?.hasData ? 'getSignaturesForAddress' : 
+         (results.methods.heliusTransactions?.hasData ? 'heliusTransactions' : 'getConfirmedSignaturesForAddress2')) 
+        : 'none'
+    };
+    
+    // Return all results
+    res.json(results);
+  } catch (error) {
+    console.error('Error testing transaction methods:', error.message);
+    res.status(500).json({ 
+      error: 'Error testing transaction methods', 
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route GET /api/wallet/token/:mintAddress
+ * @desc Get information about a token by mint address
+ */
+router.get('/token/:mintAddress', async (req, res) => {
+  try {
+    const { mintAddress } = req.params;
+    console.log(`Looking up token info for mint: ${mintAddress}`);
+    
+    // Check API key
+    const heliusApiKey = process.env.HELIUS_API_KEY;
+    if (!heliusApiKey) {
+      return res.status(400).json({ error: 'HELIUS_API_KEY not set in environment variables' });
+    }
+    
+    // Use Helius RPC to get token information
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${heliusApiKey}`;
+    
+    // First, try to get the token metadata
+    const metadataResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 1,
+      method: "getTokenAccountsByOwner",
+      params: [
+        "JBu1AL4obBcCMqKBBxhpWCNUt136ijcuMZLFvTP7iWdB", // Example address with many tokens
+        { mint: mintAddress },
+        { encoding: "jsonParsed" }
+      ]
+    });
+    
+    // Then get the token supply
+    const supplyResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 2,
+      method: "getTokenSupply",
+      params: [mintAddress]
+    });
+    
+    // Get token account metadata
+    const metadataProgramId = "metaqbxxUerdq28cj1RbAWkYQm3ybzjb6a8bt518x1s";
+    const programIdsResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "getProgramAccounts",
+      params: [
+        metadataProgramId,
+        {
+          encoding: "jsonParsed",
+          filters: [
+            {
+              memcmp: {
+                offset: 33,
+                bytes: mintAddress
+              }
+            }
+          ]
+        }
+      ]
+    });
+    
+    // Combine the results
+    const tokenInfo = {
+      mint: mintAddress,
+      supply: supplyResponse.data?.result?.value?.uiAmount || "Unknown",
+      decimals: supplyResponse.data?.result?.value?.decimals || 0,
+      accounts: metadataResponse.data?.result?.value?.length || 0,
+      metadata: null
+    };
+    
+    // Try to extract name and symbol from metadata if available
+    if (programIdsResponse.data?.result?.length > 0) {
+      try {
+        const metadataAccount = programIdsResponse.data.result[0];
+        if (metadataAccount.account?.data?.parsed) {
+          tokenInfo.metadata = metadataAccount.account.data.parsed;
+        } else if (metadataAccount.account?.data) {
+          tokenInfo.metadata = {
+            raw: metadataAccount.account.data
+          };
+        }
+      } catch (error) {
+        console.error('Error parsing token metadata:', error);
+      }
+    }
+    
+    // Return token information
+    res.json({ token: tokenInfo });
+  } catch (error) {
+    console.error('Error getting token info:', error.message);
+    res.status(500).json({
+      error: 'Error getting token info',
+      message: error.message
     });
   }
 });
