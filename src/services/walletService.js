@@ -10,26 +10,73 @@ const openai = new OpenAI({
 const HELIUS_API_KEY = process.env.HELIUS_API_KEY;
 const HELIUS_API_URL = `https://api.helius.xyz/v0/addresses`;
 
+// Cache for SOL price to limit API calls
+const solPriceCache = {
+  price: null,
+  timestamp: null
+};
+
 /**
- * Fetch the current SOL price from CoinGecko API
- * @returns {Promise<number>} Current SOL price in USD
+ * Fetch the current SOL price from CoinGecko
+ * @returns {Promise<number>} - Current SOL price
  */
 async function fetchSolPrice() {
   try {
-    console.log('Fetching current SOL price from CoinGecko...');
-    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd');
+    // Check cache first - only fetch new price if the cached price is older than 1 hour
+    const now = Date.now();
+    const oneHourMs = 60 * 60 * 1000;
     
-    if (response.data && response.data.solana && response.data.solana.usd) {
-      const price = response.data.solana.usd;
-      console.log(`Current SOL price: $${price}`);
-      return price;
+    if (solPriceCache.price && solPriceCache.timestamp && (now - solPriceCache.timestamp < oneHourMs)) {
+      console.log('Using cached SOL price:', solPriceCache.price);
+      return solPriceCache.price;
+    }
+    
+    console.log('Fetching fresh SOL price from CoinGecko');
+    const apiKey = process.env.COINGECKO_API_KEY;
+    
+    // Configure headers based on whether we have an API key
+    const headers = {};
+    if (apiKey) {
+      console.log('Using CoinGecko API key for request');
+      headers['x-cg-pro-api-key'] = apiKey;
+    }
+    
+    const url = apiKey 
+      ? 'https://pro-api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd'
+      : 'https://api.coingecko.com/api/v3/simple/price?ids=solana&vs_currencies=usd';
+    
+    const response = await fetch(url, { headers });
+    const data = await response.json();
+    
+    if (data && data.solana && data.solana.usd) {
+      // Update cache
+      solPriceCache.price = data.solana.usd;
+      solPriceCache.timestamp = now;
+      
+      console.log('Updated SOL price cache:', solPriceCache.price);
+      return data.solana.usd;
     } else {
-      console.log('Could not get SOL price from CoinGecko, using fallback price');
-      return 125; // Fallback price if API fails
+      console.error('Unexpected CoinGecko response:', data);
+      
+      // If we have a cached price, return that even if it's old
+      if (solPriceCache.price) {
+        console.log('Using outdated cached price as fallback');
+        return solPriceCache.price;
+      }
+      
+      // Last resort fallback
+      return 100; // Default value if API fails
     }
   } catch (error) {
-    console.error('Error fetching SOL price:', error.message);
-    return 125; // Fallback price if API fails
+    console.error('Error fetching SOL price:', error);
+    
+    // Use cached price if available
+    if (solPriceCache.price) {
+      console.log('Using cached price due to API error');
+      return solPriceCache.price;
+    }
+    
+    return 100; // Default fallback value
   }
 }
 
@@ -371,7 +418,7 @@ function calculateWalletStats(walletData, solPrice) {
     let mintCount = 0;
     let totalGasSpent = 0;
     
-    // Calculate gas fees and identify transaction types from available transaction data
+    // Process detailed transaction data for more accurate metrics
     transactions.forEach(tx => {
       // Calculate gas fees from transaction data
       if (tx.meta?.fee) {
@@ -424,12 +471,26 @@ function calculateWalletStats(walletData, solPrice) {
     // Calculate average gas per transaction
     const avgGasPerTx = totalTrades > 0 ? (totalGasSpent / totalTrades) : 0;
     
+    // Calculate account age in days
+    let accountAgeDays = 0;
+    if (firstActivityDate) {
+      const firstDate = new Date(firstActivityDate);
+      const now = new Date();
+      const diffTime = Math.abs(now - firstDate);
+      accountAgeDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+    }
+    
+    // Calculate transactions per day (activity level)
+    const txPerDay = accountAgeDays > 0 ? totalTrades / accountAgeDays : 0;
+    
     // Calculate score
     const score = calculateScore({
       totalTrades,
       successRate,
       avgGasPerTx,
-      nativeBalance
+      nativeBalance,
+      accountAgeDays,
+      txPerDay
     });
     
     // Generate transaction history
@@ -485,13 +546,31 @@ function calculateWalletStats(walletData, solPrice) {
       });
     }
     
-    // Generate achievements
+    // Format transactions for display in the table
+    let recentTransactions = [];
+    if (transactions && transactions.length > 0) {
+      recentTransactions = transactions.map(tx => ({
+        description: tx.description || 'Transaction',
+        signature: tx.signature || null,
+        timestamp: tx.timestamp || (tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null),
+        successful: tx.successful !== undefined ? tx.successful : (tx.err === null),
+        fee: tx.fee || tx.meta?.fee || 0,
+      }));
+    }
+    
+    // Generate achievements with additional metrics
     const achievements = generateAchievements({
       score,
       totalTrades,
-      successRate,
+      successRate, 
       totalGasSpent,
-      nativeBalance
+      nativeBalance,
+      accountAgeDays,
+      txPerDay,
+      swapCount,
+      transfersCount,
+      mintCount,
+      tokens: tokens.length
     });
     
     // Create summary stats for display
@@ -513,10 +592,13 @@ function calculateWalletStats(walletData, solPrice) {
       failedTxCount,
       firstActivityDate,
       lastActivityDate,
+      accountAgeDays,
+      txPerDay: txPerDay.toFixed(2),
       score: totalTrades > 0 ? score : null,
       // Visualization data
       txHistory,
       tokens,
+      recentTransactions,
       // Remove NFTs completely
       achievements: totalTrades > 0 ? achievements : [],
       solPrice
@@ -710,7 +792,19 @@ function calculateScore(stats) {
 /**
  * Generate achievements based on wallet stats
  */
-function generateAchievements({ score, totalTrades, successRate, totalGasSpent, nativeBalance }) {
+function generateAchievements({ 
+  score, 
+  totalTrades, 
+  successRate, 
+  totalGasSpent, 
+  nativeBalance,
+  accountAgeDays,
+  txPerDay,
+  swapCount,
+  transfersCount,
+  mintCount,
+  tokens
+}) {
   const achievements = [];
   
   // Score-based achievements
@@ -736,25 +830,40 @@ function generateAchievements({ score, totalTrades, successRate, totalGasSpent, 
     });
   }
   
-  // SOL balance achievements
-  if (nativeBalance > 10) {
+  // Balance-based achievements
+  if (nativeBalance > 100) {
     achievements.push({ 
       title: 'SOL Whale 🐳', 
-      description: `Holding ${nativeBalance.toFixed(2)} SOL.` 
+      description: `Holding ${nativeBalance.toFixed(2)} SOL worth $${(nativeBalance * 100).toFixed(2)}.` 
+    });
+  } else if (nativeBalance > 10) {
+    achievements.push({ 
+      title: 'SOL Stacker 💰', 
+      description: `Holding ${nativeBalance.toFixed(2)} SOL. Not too shabby!` 
+    });
+  } else if (nativeBalance < 0.1 && totalTrades > 10) {
+    achievements.push({ 
+      title: 'Dust Collector 💨', 
+      description: `Your wallet is running on fumes with only ${nativeBalance.toFixed(4)} SOL left.` 
     });
   }
   
-  // Activity achievements
-  if (totalGasSpent > 0.5) {
+  // Activity-based achievements
+  if (totalGasSpent > 1) {
     achievements.push({ 
       title: 'Gas Guzzler 🛢️', 
       description: `Spent ${totalGasSpent.toFixed(4)} SOL on gas fees.` 
     });
   }
   
-  if (totalTrades > 50) {
+  if (totalTrades > 100) {
     achievements.push({ 
-      title: 'Active Trader 🎰', 
+      title: 'Trade Addict 🎰', 
+      description: `Made ${totalTrades} transactions on Solana.` 
+    });
+  } else if (totalTrades > 50) {
+    achievements.push({ 
+      title: 'Active Trader 📈', 
       description: `Made ${totalTrades} transactions on Solana.` 
     });
   }
@@ -763,6 +872,72 @@ function generateAchievements({ score, totalTrades, successRate, totalGasSpent, 
     achievements.push({
       title: 'Transaction Fumbler 🤦',
       description: `${100-successRate}% of your transactions failed. Maybe check your settings?`
+    });
+  } else if (successRate > 98 && totalTrades > 20) {
+    achievements.push({
+      title: 'Transaction Master ✅',
+      description: `${successRate}% success rate across ${totalTrades} transactions. Impressive!`
+    });
+  }
+  
+  // Account age achievements
+  if (accountAgeDays > 365) {
+    achievements.push({
+      title: 'Solana OG 👴',
+      description: `Your wallet has been active for ${Math.floor(accountAgeDays / 365)} year(s) and ${accountAgeDays % 365} days.`
+    });
+  } else if (accountAgeDays > 30) {
+    achievements.push({
+      title: 'Solana Citizen 🏙️',
+      description: `Your wallet has been active for ${accountAgeDays} days.`
+    });
+  } else if (accountAgeDays < 7) {
+    achievements.push({
+      title: 'Solana Newbie 🐣',
+      description: 'Welcome to Solana! Your wallet is less than a week old.'
+    });
+  }
+  
+  // Activity frequency achievements
+  if (txPerDay > 5 && accountAgeDays > 14) {
+    achievements.push({
+      title: 'Hyperactive Trader 🚀',
+      description: `Averaging ${txPerDay.toFixed(1)} transactions per day. Do you ever sleep?`
+    });
+  }
+  
+  // Transaction type achievements
+  if (swapCount > 20) {
+    achievements.push({
+      title: 'Swap King 👑',
+      description: `Made ${swapCount} token swaps. Always chasing the next gem?`
+    });
+  }
+  
+  if (transfersCount > 30) {
+    achievements.push({
+      title: 'Transfer Wizard 🧙',
+      description: `Made ${transfersCount} transfers. Popular wallet!`
+    });
+  }
+  
+  if (mintCount > 5) {
+    achievements.push({
+      title: 'NFT Collector 🖼️',
+      description: `Minted ${mintCount} NFTs or tokens. Web3 creativity at its finest!`
+    });
+  }
+  
+  // Token diversity achievements
+  if (tokens > 5) {
+    achievements.push({
+      title: 'Token Diversifier 🌈',
+      description: `Holding ${tokens} different tokens. Spreading those bets!`
+    });
+  } else if (tokens === 1 && totalTrades > 10) {
+    achievements.push({
+      title: 'SOL Maximalist ☀️',
+      description: 'Only holding SOL despite all those transactions. Loyalty!'
     });
   }
   
