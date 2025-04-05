@@ -324,8 +324,12 @@ async function fetchWalletData(address) {
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
     const walletData = { address };
     
+    console.log('=== Starting Wallet Data Fetch ===');
+    console.log(`Wallet Address: ${address}`);
+    console.log(`RPC URL: ${rpcUrl}`);
+    
     // 1. Get SOL balance
-    console.log('Fetching SOL balance...');
+    console.log('\n1. Fetching SOL balance...');
     const balanceResponse = await axios.post(rpcUrl, {
       jsonrpc: "2.0",
       id: 1,
@@ -333,8 +337,13 @@ async function fetchWalletData(address) {
       params: [address]
     });
     
+    console.log('Balance Response:', {
+      status: balanceResponse.status,
+      statusText: balanceResponse.statusText,
+      data: balanceResponse.data
+    });
+    
     if (balanceResponse.data?.result?.value) {
-      // Convert lamports to SOL (1 SOL = 1,000,000,000 lamports)
       walletData.nativeBalance = balanceResponse.data.result.value / 1000000000;
       console.log(`Native SOL balance: ${walletData.nativeBalance} SOL`);
     } else {
@@ -342,7 +351,7 @@ async function fetchWalletData(address) {
     }
     
     // 2. Get token accounts
-    console.log('Fetching token accounts...');
+    console.log('\n2. Fetching token accounts...');
     const tokenResponse = await axios.post(rpcUrl, {
       jsonrpc: "2.0",
       id: 2,
@@ -354,11 +363,16 @@ async function fetchWalletData(address) {
       ]
     });
     
+    console.log('Token Response:', {
+      status: tokenResponse.status,
+      statusText: tokenResponse.statusText,
+      dataLength: tokenResponse.data?.result?.value?.length || 0
+    });
+    
     if (tokenResponse.data?.result?.value) {
       walletData.tokenAccounts = tokenResponse.data.result.value;
       console.log(`Found ${walletData.tokenAccounts.length} token accounts`);
       
-      // Log the first token account for debugging
       if (walletData.tokenAccounts.length > 0) {
         console.log('Sample token account:', JSON.stringify(walletData.tokenAccounts[0]?.account?.data?.parsed?.info || {}, null, 2));
       }
@@ -366,9 +380,8 @@ async function fetchWalletData(address) {
       console.log('No token accounts found or error in response:', tokenResponse.data);
     }
     
-    // 3. PRIORITIZE: Get transaction signatures with getSignaturesForAddress
-    // (this worked in the test when other methods failed)
-    console.log('Fetching transaction signatures with getSignaturesForAddress...');
+    // 3. Get transaction signatures
+    console.log('\n3. Fetching transaction signatures...');
     let signaturesFound = false;
     
     try {
@@ -380,30 +393,26 @@ async function fetchWalletData(address) {
         params: [address, { limit: 50 }]
       });
       
-      // Log full response for debugging
-      if (signaturesResponse.data) {
-        console.log(`Got response with status ${signaturesResponse.status}, data type: ${typeof signaturesResponse.data}`);
-        
-        if (signaturesResponse.data.result) {
-          console.log(`Found ${signaturesResponse.data.result.length} signatures in result`);
-        } else {
-          console.log('No result field in response:', Object.keys(signaturesResponse.data));
-        }
-      }
+      console.log('Signatures Response:', {
+        status: signaturesResponse.status,
+        statusText: signaturesResponse.statusText,
+        resultLength: signaturesResponse.data?.result?.length || 0
+      });
       
       if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
         walletData.signatures = signaturesResponse.data.result;
         signaturesFound = true;
         console.log(`Found ${walletData.signatures.length} transaction signatures`);
         
-        // Get full transaction details for the 10 most recent transactions
+        // Get full transaction details
         const transactionsToFetch = walletData.signatures.slice(0, 10);
-        console.log(`Fetching details for ${transactionsToFetch.length} recent transactions...`);
+        console.log(`\n4. Fetching details for ${transactionsToFetch.length} recent transactions...`);
         
         walletData.transactions = [];
         
         for (const sigData of transactionsToFetch) {
           try {
+            console.log(`Fetching transaction: ${sigData.signature}`);
             const txResponse = await axios.post(rpcUrl, {
               jsonrpc: "2.0",
               id: 4,
@@ -414,8 +423,13 @@ async function fetchWalletData(address) {
               ]
             });
             
+            console.log('Transaction Response:', {
+              status: txResponse.status,
+              statusText: txResponse.statusText,
+              hasResult: !!txResponse.data?.result
+            });
+            
             if (txResponse.data?.result) {
-              // Add more easily accessible metadata
               const tx = txResponse.data.result;
               tx.blockTime = tx.blockTime || sigData.blockTime;
               tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
@@ -423,12 +437,11 @@ async function fetchWalletData(address) {
               tx.fee = tx.meta?.fee || 0;
               tx.signature = sigData.signature;
               
-              // Extract transaction type and description from instructions
+              // Extract transaction type and description
               if (tx.transaction?.message?.instructions) {
                 const instructions = tx.transaction.message.instructions;
                 let description = "";
                 
-                // Look for common instruction patterns
                 for (const instruction of instructions) {
                   if (instruction.program === 'system') {
                     if (instruction.parsed?.type === 'transfer') {
@@ -444,7 +457,6 @@ async function fetchWalletData(address) {
                   }
                 }
                 
-                // Set a default description if we couldn't determine one
                 if (!description) {
                   description = tx.meta?.innerInstructions?.length > 0
                     ? "Complex Transaction"
@@ -457,76 +469,39 @@ async function fetchWalletData(address) {
               walletData.transactions.push(tx);
             }
           } catch (err) {
-            console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
+            console.error(`Error fetching transaction ${sigData.signature}:`, {
+              message: err.message,
+              response: err.response?.data
+            });
           }
         }
         
         console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
       } else {
         console.log('No transaction signatures found in response.');
-        
-        // If response has different structure, try to extract signatures
-        if (signaturesResponse.data && typeof signaturesResponse.data === 'object') {
-          console.log('Checking alternative response formats');
-          if (signaturesResponse.data.signatures?.result) {
-            walletData.signatures = signaturesResponse.data.signatures.result;
-            signaturesFound = true;
-            console.log(`Found ${walletData.signatures.length} signatures in alternative location`);
-          }
-        }
       }
     } catch (error) {
-      console.error('Error fetching transaction signatures:', error.message);
-      if (error.response) {
-        console.error('Response status:', error.response.status);
-        console.error('Response data:', error.response.data);
-      }
+      console.error('Error fetching transaction signatures:', {
+        message: error.message,
+        response: error.response?.data
+      });
     }
     
-    // 4. FALLBACK: If we didn't find signatures, try getConfirmedSignaturesForAddress2
-    if (!signaturesFound) {
-      try {
-        console.log('Trying alternative getConfirmedSignaturesForAddress2...');
-        const oldSigResponse = await axios.post(rpcUrl, {
-          jsonrpc: "2.0",
-          id: 5,
-          method: "getConfirmedSignaturesForAddress2",
-          params: [address, { limit: 50 }]
-        });
-        
-        if (oldSigResponse.data?.result && oldSigResponse.data.result.length > 0) {
-          walletData.signatures = oldSigResponse.data.result;
-          signaturesFound = true;
-          console.log(`Found ${walletData.signatures.length} signatures via fallback method`);
-        } else {
-          console.log('No signatures found via fallback method');
-        }
-      } catch (err) {
-        console.error('Error with fallback signature method:', err.message);
-      }
-    }
-    
-    // 5. LAST RESORT: If we still don't have transactions, try Helius transactions endpoint
-    if (!walletData.transactions || walletData.transactions.length === 0) {
-      console.log('No transactions from RPC methods, trying Helius transactions endpoint...');
-      try {
-        const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=20`;
-        const txResponse = await axios.get(txUrl);
-        
-        if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
-          walletData.transactions = txResponse.data.transactions;
-          console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
-        } else {
-          console.log('No transactions found from Helius transactions endpoint either.');
-        }
-      } catch (err) {
-        console.error('Error with Helius transactions endpoint:', err.message);
-      }
-    }
+    console.log('\n=== Wallet Data Fetch Complete ===');
+    console.log('Final wallet data structure:', {
+      hasNativeBalance: !!walletData.nativeBalance,
+      tokenAccountsCount: walletData.tokenAccounts?.length || 0,
+      signaturesCount: walletData.signatures?.length || 0,
+      transactionsCount: walletData.transactions?.length || 0
+    });
     
     return walletData;
   } catch (error) {
-    console.error('Error fetching wallet data:', error.message);
+    console.error('Error in fetchWalletData:', {
+      message: error.message,
+      response: error.response?.data,
+      stack: error.stack
+    });
     return { error: error.message };
   }
 }
