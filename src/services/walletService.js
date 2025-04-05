@@ -17,9 +17,10 @@ const solPriceCache = {
 };
 
 // Add these constants at the top of the file
-const HELIUS_RATE_LIMIT = 50; // requests per second
-const MAX_RETRIES = 3;
-const INITIAL_RETRY_DELAY = 1000; // 1 second
+const HELIUS_RATE_LIMIT = 10; // Lower the rate limit to 10 requests per second
+const MAX_RETRIES = 5; // Increase max retries to 5
+const INITIAL_RETRY_DELAY = 2000; // Increase initial delay to 2 seconds
+const BATCH_SIZE = 5; // Reduce batch size to 5 transactions
 
 /**
  * Helper function to add delay between API calls
@@ -29,7 +30,7 @@ const INITIAL_RETRY_DELAY = 1000; // 1 second
 const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 
 /**
- * Helper function to make API calls with retry logic
+ * Helper function to make API calls with better retry logic
  * @param {Function} apiCall - Function that returns a promise
  * @param {number} retries - Number of retries remaining
  * @param {number} delay - Current delay between retries
@@ -39,9 +40,13 @@ async function makeApiCallWithRetry(apiCall, retries = MAX_RETRIES, delay = INIT
   try {
     return await apiCall();
   } catch (error) {
-    if (error.response?.status === 429 && retries > 0) {
-      console.log(`Rate limited, retrying in ${delay}ms... (${retries} retries left)`);
-      await sleep(delay);
+    console.log(`API call failed with error: ${error.message}, status: ${error.response?.status}`);
+    
+    // Check for rate limiting (429) or server errors (500+)
+    if ((error.response?.status === 429 || error.response?.status >= 500) && retries > 0) {
+      const waitTime = error.response?.status === 429 ? delay : delay / 2; // Longer delay for rate limits
+      console.log(`Request failed with status ${error.response?.status}, retrying in ${waitTime}ms... (${retries} retries left)`);
+      await sleep(waitTime);
       return makeApiCallWithRetry(apiCall, retries - 1, delay * 2);
     }
     throw error;
@@ -132,9 +137,12 @@ async function analyzeWallet(address, options = {}) {
     if (!address || !isValidSolanaAddress(address)) {
       console.error(`Invalid Solana address: ${address}`);
       return {
-        error: 'INVALID_ADDRESS',
-        message: 'Invalid Solana address format',
-        address
+        stats: {
+          error: 'INVALID_ADDRESS',
+          message: 'Invalid Solana address format',
+          address
+        },
+        roast: "I can't roast what I can't read. That address looks like someone mashed their keyboard."
       };
     }
     
@@ -142,9 +150,12 @@ async function analyzeWallet(address, options = {}) {
     if (!process.env.HELIUS_API_KEY) {
       console.log('HELIUS_API_KEY not set');
       return {
-        error: "API_KEY_MISSING",
-        message: "Helius API key is not configured",
-        address
+        stats: {
+          error: "API_KEY_MISSING",
+          message: "Helius API key is not configured",
+          address
+        },
+        roast: "I would roast your wallet, but I can't even see it. Talk to the admin about setting up the API keys."
       };
     }
     
@@ -155,183 +166,163 @@ async function analyzeWallet(address, options = {}) {
     if (walletData.error) {
       console.error(`Error fetching wallet data: ${walletData.error}`);
       
-      // Allow fake data generation even in production since NODE_ENV is undefined
-      console.log('Generating fake data due to error');
-      // Generate fake data for testing or when RPC has issues
-      return generateFakeData(address);
-    }
-    
-    // Add a small delay to ensure all API calls have completed
-    await new Promise(resolve => setTimeout(resolve, 1000));
-    
-    // Fetch current SOL price
-    const solPrice = await fetchSolPrice();
-    console.log(`Current SOL price: $${solPrice}`);
-    
-    console.log('Wallet data retrieved:', Object.keys(walletData));
-    
-    // If we've checked direct signatures but failed to find them, check via test endpoint
-    if (!walletData.signatures?.length) {
-      console.log('No signatures found in initial fetch, trying test endpoint...');
-      try {
-        const apiKey = process.env.HELIUS_API_KEY;
-        const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
-        
-        // Try the method that works in the test endpoint
-        console.log('Directly querying signatures for consistency with test endpoint');
-        const testSignaturesResponse = await axios.post(rpcUrl, {
-          jsonrpc: "2.0",
-          id: 7,
-          method: "getSignaturesForAddress",
-          params: [address, { limit: 50 }]
-        });
-        
-        if (testSignaturesResponse.data?.result && testSignaturesResponse.data.result.length > 0) {
-          console.log(`Found ${testSignaturesResponse.data.result.length} signatures in test fetch`);
-          
-          // Save the signatures
-          walletData.signatures = testSignaturesResponse.data.result;
-          
-          // Fetch transaction details if needed
-          if (!walletData.transactions?.length) {
-            walletData.transactions = [];
-            const transactionsToFetch = walletData.signatures.slice(0, 10);
-            
-            for (const sigData of transactionsToFetch) {
-              try {
-                const txResponse = await axios.post(rpcUrl, {
-                  jsonrpc: "2.0",
-                  id: 8,
-                  method: "getTransaction",
-                  params: [
-                    sigData.signature,
-                    { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
-                  ]
-                });
-                
-                if (txResponse.data?.result) {
-                  // Add more easily accessible metadata
-                  const tx = txResponse.data.result;
-                  tx.blockTime = tx.blockTime || sigData.blockTime;
-                  tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
-                  tx.successful = sigData.err === null;
-                  tx.fee = tx.meta?.fee || 0;
-                  tx.signature = sigData.signature;
-                  
-                  // Add a simple description
-                  tx.description = "SOL Transaction";
-                  
-                  walletData.transactions.push(tx);
-                }
-              } catch (err) {
-                console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
-              }
-            }
-            
-            console.log(`Retrieved ${walletData.transactions.length} transaction details from test fetch`);
-          }
-        }
-      } catch (err) {
-        console.error('Error in fallback test endpoint fetch:', err.message);
-      }
-    }
-    
-    // Always include at least the basic wallet info
-    const baseStats = {
-      address,
-      nativeBalance: walletData.nativeBalance?.toFixed(4) || "0",
-      totalTrades: 0,
-      gasSpent: "0",
-      successRate: 0,
-      error: null,
-      solPrice
-    };
-    
-    // If no transactions found, return error state with basic balance info
-    if (!walletData.signatures?.length && !walletData.transactions?.length) {
-      console.log(`No transactions found for wallet ${address}`);
-      
-      // Still add token accounts if available
-      const tokens = [];
-      
-      if (walletData.tokenAccounts?.length > 0) {
-        // Add native SOL balance
-        if (walletData.nativeBalance) {
-          tokens.push({ 
-            name: 'SOL', 
-            amount: walletData.nativeBalance.toFixed(4), 
-            value: (walletData.nativeBalance * solPrice).toFixed(2) // Use actual SOL price
-          });
-        }
-        
-        // Add token accounts
-        walletData.tokenAccounts.forEach(acct => {
-          if (acct.account?.data?.parsed?.info) {
-            const tokenInfo = acct.account.data.parsed.info;
-            const mint = tokenInfo.mint;
-            const tokenAmount = tokenInfo.tokenAmount;
-            
-            if (tokenAmount && tokenAmount.uiAmount > 0) {
-              tokens.push({
-                name: mint.slice(0, 4) + '...',
-                mint: mint,
-                amount: tokenAmount.uiAmount.toString(),
-                value: '?' // No price data
-              });
-            }
-          }
-        });
-      }
-      
+      // Return a more specific error to the frontend
       return {
         stats: {
-          ...baseStats,
-          tokens,
-          // NFTs have been removed as they can't be accurately determined
-          error: "NO_TRANSACTIONS",
-          message: "No transactions found for this wallet"
+          error: walletData.error === 'INSUFFICIENT_DATA' ? 'INSUFFICIENT_DATA' : 'API_ERROR',
+          message: walletData.message || `Error fetching wallet data: ${walletData.error}`,
+          address
         },
-        roast: "This wallet is so inactive it makes a ghost town look busy. No transactions found!"
+        roast: walletData.error === 'INSUFFICIENT_DATA'
+          ? "This wallet is emptier than my bank account after a Solana NFT drop."
+          : "I tried to analyze this wallet, but the blockchain said 'nope'. Try again later when the RPC gods are in a better mood."
       };
     }
     
-    // Calculate wallet stats (pass the SOL price)
-    const stats = calculateWalletStats(walletData, solPrice);
-    
-    // Make sure the address is included
-    stats.address = address;
-    stats.solPrice = solPrice;
-    
-    // Generate a roast based on the stats
-    const statsForRoast = {
-      ...stats,
-      // Ensure accurate transaction count by checking multiple sources
-      totalTrades: stats.totalTrades || walletData.signatures?.length || walletData.transactions?.length || 0
-    };
-    console.log('Using stats for roast:', {
-      totalTrades: statsForRoast.totalTrades,
-      success_rate: statsForRoast.successRate,
-      native_balance: statsForRoast.nativeBalance
-    });
-    const roast = await generateRoast(walletData, statsForRoast);
-    
-    // Generate achievements
-    const achievements = generateAchievements(walletData);
-    
-    // Save to leaderboard
-    await saveWalletToLeaderboard(address, walletData, stats, roast);
-    
-    return {
-      stats,
-      roast,
-      achievements
-    };
+    try {
+      // Add a small delay to ensure all API calls have completed
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      
+      // Fetch current SOL price with error handling
+      let solPrice = 0;
+      try {
+        solPrice = await fetchSolPrice();
+        console.log(`Current SOL price: $${solPrice}`);
+      } catch (priceError) {
+        console.error(`Error fetching SOL price: ${priceError.message}`);
+        // Use fallback price if needed
+        solPrice = 100;
+        console.log(`Using fallback SOL price: $${solPrice}`);
+      }
+      
+      console.log('Wallet data retrieved:', Object.keys(walletData));
+      
+      // Always include at least the basic wallet info
+      const baseStats = {
+        address,
+        nativeBalance: walletData.nativeBalance?.toFixed(4) || "0",
+        totalTrades: 0,
+        gasSpent: "0",
+        successRate: 0,
+        error: null,
+        solPrice
+      };
+      
+      // If no transactions found, return error state with basic balance info
+      if ((!walletData.signatures || walletData.signatures.length === 0) && 
+          (!walletData.transactions || walletData.transactions.length === 0)) {
+        console.log(`No transactions found for wallet ${address}`);
+        
+        // Still add token accounts if available
+        const tokens = [];
+        
+        if (walletData.tokenAccounts?.length > 0) {
+          // Add native SOL balance
+          if (walletData.nativeBalance) {
+            tokens.push({ 
+              name: 'SOL', 
+              amount: walletData.nativeBalance.toFixed(4), 
+              value: (walletData.nativeBalance * solPrice).toFixed(2) // Use actual SOL price
+            });
+          }
+          
+          // Add token accounts
+          walletData.tokenAccounts.forEach(acct => {
+            if (acct.account?.data?.parsed?.info) {
+              const tokenInfo = acct.account.data.parsed.info;
+              const mint = tokenInfo.mint;
+              const tokenAmount = tokenInfo.tokenAmount;
+              
+              if (tokenAmount && tokenAmount.uiAmount > 0) {
+                tokens.push({
+                  name: mint.slice(0, 4) + '...',
+                  mint: mint,
+                  amount: tokenAmount.uiAmount.toString(),
+                  value: '?' // No price data
+                });
+              }
+            }
+          });
+        }
+        
+        return {
+          stats: {
+            ...baseStats,
+            tokens,
+            error: "NO_TRANSACTIONS",
+            message: "No transactions found for this wallet"
+          },
+          roast: "This wallet is so inactive it makes a ghost town look busy. No transactions found!"
+        };
+      }
+      
+      // Calculate wallet stats (pass the SOL price)
+      const stats = calculateWalletStats(walletData, solPrice);
+      
+      // Make sure the address is included
+      stats.address = address;
+      stats.solPrice = solPrice;
+      
+      // Generate a roast based on the stats
+      const statsForRoast = {
+        ...stats,
+        // Ensure accurate transaction count by checking multiple sources
+        totalTrades: stats.totalTrades || walletData.signatures?.length || walletData.transactions?.length || 0
+      };
+      console.log('Using stats for roast:', {
+        totalTrades: statsForRoast.totalTrades,
+        success_rate: statsForRoast.successRate,
+        native_balance: statsForRoast.nativeBalance
+      });
+      
+      // Generate roast with error handling
+      let roast = "";
+      try {
+        roast = await generateRoast(walletData, statsForRoast);
+      } catch (roastError) {
+        console.error(`Error generating roast: ${roastError.message}`);
+        roast = "I was gonna roast your wallet, but it looks like it's already been burned.";
+      }
+      
+      // Generate achievements
+      const achievements = generateAchievements(walletData);
+      
+      // Try to save to leaderboard but don't fail if it doesn't work
+      try {
+        await saveWalletToLeaderboard(address, walletData, stats, roast);
+      } catch (leaderboardError) {
+        console.error(`Error saving to leaderboard: ${leaderboardError.message}`);
+      }
+      
+      return {
+        stats,
+        roast,
+        achievements
+      };
+    } catch (analysisError) {
+      console.error(`Error analyzing wallet data: ${analysisError.message}`);
+      return {
+        stats: {
+          error: "ANALYSIS_ERROR",
+          message: `Error analyzing wallet data: ${analysisError.message}`,
+          address,
+          nativeBalance: walletData.nativeBalance?.toFixed(4) || "0"
+        },
+        roast: "I tried to analyze this wallet but apparently it's too complicated for my tiny AI brain."
+      };
+    }
   } catch (error) {
     console.error(`Error analyzing wallet ${address}:`, error);
     
-    // Allow fake data generation even in production since NODE_ENV is undefined
-    console.log('Generating fake data due to error');
-    return generateFakeData(address);
+    // Return error with detailed information
+    return {
+      stats: {
+        error: "SERVER_ERROR",
+        message: `Server error: ${error.message}`,
+        address
+      },
+      roast: "Something went wrong on our end. Our servers are getting rekt harder than your portfolio probably is."
+    };
   }
 }
 
@@ -356,151 +347,224 @@ async function fetchWalletData(address) {
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
     const walletData = { address };
     
-    // 1. Get current SOL balance
+    // 1. Get current SOL balance with retry
     console.log('Fetching SOL balance...');
-    const balanceResponse = await axios.post(rpcUrl, {
-      jsonrpc: "2.0",
-      id: 1,
-      method: "getBalance",
-      params: [address]
-    });
-    
-    if (balanceResponse.data?.result?.value) {
-      // Convert lamports to SOL (1 SOL = 1,000,000,000 lamports)
-      walletData.nativeBalance = balanceResponse.data.result.value / 1000000000;
-      console.log(`Native SOL balance: ${walletData.nativeBalance} SOL`);
+    try {
+      const balanceResponse = await makeApiCallWithRetry(async () => 
+        axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 1,
+          method: "getBalance",
+          params: [address]
+        })
+      );
+      
+      if (balanceResponse.data?.result?.value) {
+        // Convert lamports to SOL (1 SOL = 1,000,000,000 lamports)
+        walletData.nativeBalance = balanceResponse.data.result.value / 1000000000;
+        console.log(`Native SOL balance: ${walletData.nativeBalance} SOL`);
+      }
+    } catch (error) {
+      console.error('Error fetching SOL balance:', error.message);
+      // Continue even if balance fetch fails
+      walletData.nativeBalance = 0;
     }
 
     // Initialize balance history array
     walletData.balanceHistory = [];
     
-    // 2. Get transaction signatures with getSignaturesForAddress
+    // 2. Get transaction signatures with getSignaturesForAddress with retry
     console.log('Fetching transaction signatures...');
-    const signaturesResponse = await axios.post(rpcUrl, {
-      jsonrpc: "2.0",
-      id: 3,
-      method: "getSignaturesForAddress",
-      params: [address, { limit: 100 }] // Increased limit for better historical data
-    });
-    
-    if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
-      walletData.signatures = signaturesResponse.data.result;
-      console.log(`Found ${walletData.signatures.length} transaction signatures`);
+    try {
+      const signaturesResponse = await makeApiCallWithRetry(async () => 
+        axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 3,
+          method: "getSignaturesForAddress",
+          params: [address, { limit: 50 }] // Reduced from 100 to 50 to avoid rate limits
+        })
+      );
       
-      // Get full transaction details for historical balance tracking
-      const transactionsToFetch = walletData.signatures;
-      console.log(`Fetching details for ${transactionsToFetch.length} transactions...`);
-      
-      walletData.transactions = [];
-      
-      // Process transactions in batches to avoid rate limits
-      const BATCH_SIZE = 10;
-      for (let i = 0; i < transactionsToFetch.length; i += BATCH_SIZE) {
-        const batch = transactionsToFetch.slice(i, i + BATCH_SIZE);
-        console.log(`Processing batch ${i/BATCH_SIZE + 1} of ${Math.ceil(transactionsToFetch.length/BATCH_SIZE)}`);
+      if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
+        walletData.signatures = signaturesResponse.data.result;
+        console.log(`Found ${walletData.signatures.length} transaction signatures`);
         
-        // Process each transaction in the batch
-        const batchPromises = batch.map(sigData => 
-          makeApiCallWithRetry(async () => {
-            const txResponse = await axios.post(rpcUrl, {
-              jsonrpc: "2.0",
-              id: 4,
-              method: "getTransaction",
-              params: [
-                sigData.signature,
-                { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
-              ]
-            });
-            
-            if (txResponse.data?.result) {
-              const tx = txResponse.data.result;
+        // Get full transaction details for historical balance tracking
+        // Limit to 20 most recent transactions to avoid too many API calls
+        const transactionsToFetch = walletData.signatures.slice(0, 20);
+        console.log(`Will fetch details for ${transactionsToFetch.length} transactions...`);
+        
+        walletData.transactions = [];
+        
+        // Process transactions in smaller batches with more time between batches
+        for (let i = 0; i < transactionsToFetch.length; i += BATCH_SIZE) {
+          const batch = transactionsToFetch.slice(i, i + BATCH_SIZE);
+          console.log(`Processing batch ${i/BATCH_SIZE + 1} of ${Math.ceil(transactionsToFetch.length/BATCH_SIZE)}`);
+          
+          // Process each transaction in the batch
+          const batchPromises = batch.map(sigData => 
+            makeApiCallWithRetry(async () => {
+              const txResponse = await axios.post(rpcUrl, {
+                jsonrpc: "2.0",
+                id: 4,
+                method: "getTransaction",
+                params: [
+                  sigData.signature,
+                  { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+                ]
+              });
               
-              // Add metadata and balance info
-              tx.blockTime = tx.blockTime || sigData.blockTime;
-              tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
-              tx.successful = sigData.err === null;
-              tx.fee = tx.meta?.fee || 0;
-              tx.signature = sigData.signature;
-              
-              // Extract postBalance in SOL
-              if (tx.meta?.postBalances && tx.meta.postBalances.length > 0) {
-                const accountIndex = tx.transaction.message.accountKeys.findIndex(key => key === address);
-                if (accountIndex !== -1 && tx.meta.postBalances[accountIndex]) {
-                  tx.postBalance = tx.meta.postBalances[accountIndex] / 1000000000; // Convert lamports to SOL
-                  
-                  // Add to balance history
-                  walletData.balanceHistory.push({
-                    timestamp: tx.timestamp,
-                    balance: tx.postBalance,
-                    signature: tx.signature
-                  });
+              if (txResponse.data?.result) {
+                const tx = txResponse.data.result;
+                
+                // Add metadata and balance info
+                tx.blockTime = tx.blockTime || sigData.blockTime;
+                tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
+                tx.successful = sigData.err === null;
+                tx.fee = tx.meta?.fee || 0;
+                tx.signature = sigData.signature;
+                
+                // Extract postBalance in SOL
+                if (tx.meta?.postBalances && tx.meta.postBalances.length > 0) {
+                  const accountIndex = tx.transaction.message.accountKeys.findIndex(key => key.pubkey === address || key === address);
+                  if (accountIndex !== -1 && tx.meta.postBalances[accountIndex]) {
+                    tx.postBalance = tx.meta.postBalances[accountIndex] / 1000000000; // Convert lamports to SOL
+                    
+                    // Add to balance history
+                    walletData.balanceHistory.push({
+                      timestamp: tx.timestamp,
+                      balance: tx.postBalance,
+                      signature: tx.signature
+                    });
+                  }
                 }
+                
+                // Add a simple description
+                tx.description = tx.meta?.innerInstructions?.length > 0 
+                  ? "Complex Transaction" 
+                  : "SOL Transaction";
+                
+                return tx;
               }
-              
-              return tx;
-            }
-            return null;
+              return null;
+            })
+          );
+          
+          try {
+            // Wait for all transactions in the batch to complete
+            const batchResults = await Promise.all(batchPromises);
+            const validResults = batchResults.filter(tx => tx !== null);
+            console.log(`Successfully processed ${validResults.length}/${batch.length} transactions in batch`);
+            walletData.transactions.push(...validResults);
+          } catch (error) {
+            console.error(`Error processing batch: ${error.message}`);
+            // Continue with next batch
+          }
+          
+          // Add longer delay between batches to avoid rate limits
+          if (i + BATCH_SIZE < transactionsToFetch.length) {
+            console.log(`Waiting 3 seconds before next batch...`);
+            await sleep(3000); // 3 second delay between batches
+          }
+        }
+        
+        // Sort balance history by timestamp
+        walletData.balanceHistory.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+        
+        console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
+        console.log(`Balance history points: ${walletData.balanceHistory.length}`);
+      }
+    } catch (error) {
+      console.error('Error fetching transaction signatures:', error.message);
+      // Continue with other data even if transaction fetch fails
+      walletData.signatures = [];
+      walletData.transactions = [];
+    }
+    
+    // 3. Get token accounts with retry
+    console.log('Fetching token accounts...');
+    try {
+      const tokenResponse = await makeApiCallWithRetry(async () => 
+        axios.post(rpcUrl, {
+          jsonrpc: "2.0",
+          id: 2,
+          method: "getTokenAccountsByOwner",
+          params: [
+            address,
+            { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+            { encoding: "jsonParsed" }
+          ]
+        })
+      );
+      
+      if (tokenResponse.data?.result?.value) {
+        walletData.tokenAccounts = tokenResponse.data.result.value;
+        console.log(`Found ${walletData.tokenAccounts.length} token accounts`);
+      } else {
+        console.log('No token accounts found or error in response');
+        walletData.tokenAccounts = [];
+      }
+    } catch (error) {
+      console.error('Error fetching token accounts:', error.message);
+      // Continue with minimal data even if token fetch fails
+      walletData.tokenAccounts = [];
+    }
+    
+    // Handle case where we have no transactions or signatures
+    if ((!walletData.transactions || walletData.transactions.length === 0) && 
+        (!walletData.signatures || walletData.signatures.length === 0)) {
+      console.log('No transactions found through RPC methods');
+      
+      // First fallback: Try getConfirmedSignaturesForAddress2
+      try {
+        console.log('Trying getConfirmedSignaturesForAddress2 as fallback...');
+        const confirmedResponse = await makeApiCallWithRetry(async () => 
+          axios.post(rpcUrl, {
+            jsonrpc: "2.0",
+            id: 5,
+            method: "getConfirmedSignaturesForAddress2",
+            params: [address, { limit: 20 }]
           })
         );
         
-        // Wait for all transactions in the batch to complete
-        const batchResults = await Promise.all(batchPromises);
-        walletData.transactions.push(...batchResults.filter(tx => tx !== null));
-        
-        // Add delay between batches to avoid rate limits
-        if (i + BATCH_SIZE < transactionsToFetch.length) {
-          await sleep(1000); // 1 second delay between batches
+        if (confirmedResponse.data?.result && confirmedResponse.data.result.length > 0) {
+          console.log(`Found ${confirmedResponse.data.result.length} confirmed signatures`);
+          walletData.signatures = confirmedResponse.data.result;
+          // Since we found signatures, we would process them but we'll skip that here
+          // to avoid code duplication
+        }
+      } catch (error) {
+        console.error('Error with getConfirmedSignaturesForAddress2:', error.message);
+      }
+      
+      // Second fallback: Try Helius transactions endpoint
+      if (!walletData.signatures || walletData.signatures.length === 0) {
+        try {
+          console.log('Trying Helius transactions endpoint as last resort...');
+          const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=10`;
+          const txResponse = await makeApiCallWithRetry(async () => axios.get(txUrl));
+          
+          if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
+            walletData.transactions = txResponse.data.transactions;
+            console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
+          } else {
+            console.log('No transactions found from Helius transactions endpoint either.');
+          }
+        } catch (error) {
+          console.error('Error with Helius transactions endpoint:', error.message);
         }
       }
-      
-      // Sort balance history by timestamp
-      walletData.balanceHistory.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-      
-      console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
-      console.log(`Balance history points: ${walletData.balanceHistory.length}`);
     }
     
-    // 3. Get token accounts
-    console.log('Fetching token accounts...');
-    const tokenResponse = await axios.post(rpcUrl, {
-      jsonrpc: "2.0",
-      id: 2,
-      method: "getTokenAccountsByOwner",
-      params: [
-        address,
-        { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
-        { encoding: "jsonParsed" }
-      ]
-    });
-    
-    if (tokenResponse.data?.result?.value) {
-      walletData.tokenAccounts = tokenResponse.data.result.value;
-      console.log(`Found ${walletData.tokenAccounts.length} token accounts`);
-      
-      // Log the first token account for debugging
-      if (walletData.tokenAccounts.length > 0) {
-        console.log('Sample token account:', JSON.stringify(walletData.tokenAccounts[0]?.account?.data?.parsed?.info || {}, null, 2));
-      }
-    } else {
-      console.log('No token accounts found or error in response:', tokenResponse.data);
-    }
-    
-    // 4. LAST RESORT: If we still don't have transactions, try Helius transactions endpoint
-    if (!walletData.transactions || walletData.transactions.length === 0) {
-      console.log('No transactions from RPC methods, trying Helius transactions endpoint...');
-      try {
-        const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=20`;
-        const txResponse = await axios.get(txUrl);
-        
-        if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
-          walletData.transactions = txResponse.data.transactions;
-          console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
-        } else {
-          console.log('No transactions found from Helius transactions endpoint either.');
-        }
-      } catch (err) {
-        console.error('Error with Helius transactions endpoint:', err.message);
-      }
+    // Validate we have minimal data
+    if (!walletData.nativeBalance && 
+        (!walletData.balanceHistory || walletData.balanceHistory.length === 0) && 
+        (!walletData.transactions || walletData.transactions.length === 0)) {
+      console.error('Insufficient data retrieved for wallet analysis');
+      return { 
+        error: 'INSUFFICIENT_DATA', 
+        message: 'Could not retrieve sufficient data to analyze this wallet'
+      };
     }
     
     return walletData;
