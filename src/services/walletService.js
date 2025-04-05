@@ -2378,6 +2378,7 @@ function generateWalletAchievements(walletData) {
 
 // Export functions
 module.exports = {
+  analyzeWallet,
   runFlipsideQuery,
   fetchWalletData,
   fetchWalletTokens,
@@ -2394,5 +2395,9 @@ module.exports = {
   getWalletBalanceChartData,
   generateMockTransactionData,
   generateMockHistoricalBalances,
-  generateMockChartData // Mock chart data generator for testing
+  generateMockChartData,
+  calculateWalletStats,
+  isValidSolanaAddress,
+  saveWalletToLeaderboard,
+  generateAchievements
 }; 
