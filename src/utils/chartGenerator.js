@@ -103,12 +103,12 @@ function generateChart(data, darkMode = false, compactMode = false) {
     };
     
     // Canvas setup - adjust dimensions for compact mode
-    const width = compactMode ? 600 : 800;
-    const height = compactMode ? 300 : 400;
+    const width = 800;
+    const height = 400;
     
     // Adjust padding for compact mode (minimal padding for modal view)
     const padding = compactMode 
-      ? { top: 10, right: 10, bottom: 20, left: 10 }
+      ? { top: 10, right: 5, bottom: 20, left: 5 }
       : { top: 40, right: 20, bottom: 60, left: 60 };
     
     const canvas = createCanvas(width, height);
@@ -121,8 +121,7 @@ function generateChart(data, darkMode = false, compactMode = false) {
     // Draw title if not in compact mode
     if (!compactMode) {
       ctx.fillStyle = colors.text;
-      // Use simpler fonts to avoid rendering issues
-      ctx.font = 'bold 16px sans-serif';
+      ctx.font = 'bold 16px Arial, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('SOL Balance Over Time', width / 2, 20);
       
@@ -156,7 +155,7 @@ function generateChart(data, darkMode = false, compactMode = false) {
         // Draw y-axis labels
         const value = minValue + (i / numGridLines) * valueRange;
         ctx.fillStyle = colors.text;
-        ctx.font = '12px sans-serif';
+        ctx.font = '12px Arial, sans-serif';
         ctx.textAlign = 'right';
         ctx.fillText(value.toFixed(2), padding.left - 10, y + 4);
       }
@@ -196,7 +195,7 @@ function generateChart(data, darkMode = false, compactMode = false) {
       // Add a label explaining the issue (not in compact mode)
       if (!compactMode) {
         ctx.fillStyle = colors.text;
-        ctx.font = '14px sans-serif';
+        ctx.font = '14px Arial, sans-serif';
         ctx.textAlign = 'center';
         ctx.fillText('Insufficient data for detailed chart', width / 2, height / 2 - 40);
       }
@@ -278,7 +277,7 @@ function generateChart(data, darkMode = false, compactMode = false) {
       // Draw x-axis labels (skip in compact mode or draw smaller)
       if (!compactMode) {
         ctx.fillStyle = colors.text;
-        ctx.font = '12px sans-serif';
+        ctx.font = '12px Arial, sans-serif';
         ctx.textAlign = 'center';
         
         labels.forEach((label, index) => {
@@ -288,7 +287,7 @@ function generateChart(data, darkMode = false, compactMode = false) {
       } else if (labels.length > 1) {
         // For compact mode, just draw first and last label
         ctx.fillStyle = colors.text;
-        ctx.font = '9px sans-serif';
+        ctx.font = '9px Arial, sans-serif';
         ctx.textAlign = 'center';
         
         // Draw first label
@@ -320,16 +319,16 @@ function generateChart(data, darkMode = false, compactMode = false) {
       
       // Draw error message
       ctx.fillStyle = darkMode ? '#ffffff' : '#333333';
-      ctx.font = 'bold 16px sans-serif';
+      ctx.font = 'bold 16px Arial, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('Error Generating Chart', width / 2, 50);
       
       // Draw detailed error message
-      ctx.font = '14px sans-serif';
+      ctx.font = '14px Arial, sans-serif';
       ctx.fillText(error.message, width / 2, 100);
       
       // Draw hint for troubleshooting
-      ctx.font = '12px sans-serif';
+      ctx.font = '12px Arial, sans-serif';
       ctx.fillText('Check the server logs for more details', width / 2, 140);
       
       // Convert canvas to base64

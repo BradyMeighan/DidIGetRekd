@@ -139,7 +139,17 @@ router.get('/stats', async (req, res) => {
 router.post('/:address/leaderboard', async (req, res) => {
   try {
     const { address } = req.params;
-    const { score, totalTrades, gasSpent, pnl, walletValue, nativeBalance, lastRoast, solPrice } = req.body;
+    const { 
+      score, 
+      totalTrades, 
+      gasSpent, 
+      pnl, 
+      walletValue, 
+      nativeBalance, 
+      lastRoast, 
+      solPrice,
+      txHistory  // Add txHistory to the destructuring
+    } = req.body;
     
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
@@ -161,6 +171,12 @@ router.post('/:address/leaderboard', async (req, res) => {
     // Add lastRoast to roasts array if provided
     if (lastRoast) {
       updateData.lastRoast = lastRoast;
+    }
+    
+    // Add txHistory if provided
+    if (txHistory && Array.isArray(txHistory) && txHistory.length > 0) {
+      console.log(`Storing ${txHistory.length} tx history points for wallet ${address}`);
+      updateData.txHistory = txHistory;
     }
     
     const result = await Wallet.findOneAndUpdate(
@@ -186,55 +202,13 @@ router.post('/:address/leaderboard', async (req, res) => {
         nativeBalance: result.nativeBalance,
         solPrice: result.solPrice,
         lastRoast: result.lastRoast,
+        txHistory: result.txHistory,  // Include txHistory in the response
         createdAt: result.createdAt,
         lastSeen: result.lastSeen
       }
     });
   } catch (error) {
     console.error('Error saving to leaderboard:', error);
-    return res.status(500).json({ error: 'Server error' });
-  }
-});
-
-/**
- * GET /api/leaderboard/:address/check
- * Check if a wallet is already in the leaderboard database
- */
-router.get('/:address/check', async (req, res) => {
-  try {
-    const { address } = req.params;
-    
-    if (!address) {
-      return res.status(400).json({ error: 'Wallet address is required' });
-    }
-    
-    // Find the wallet by address
-    const wallet = await Wallet.findOne({ address })
-      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen createdAt')
-      .lean();
-    
-    if (!wallet) {
-      return res.status(404).json({ error: 'Wallet not found' });
-    }
-    
-    // Process wallet data for response
-    const walletData = {
-      address: wallet.address,
-      score: Number(wallet.score) || 0,
-      totalTrades: Number(wallet.totalTrades) || 0,
-      gasSpent: Number(wallet.gasSpent) || 0,
-      pnl: Number(wallet.pnl) || 0,
-      walletValue: Number(wallet.walletValue) || 0,
-      nativeBalance: Number(wallet.nativeBalance) || 0,
-      solPrice: Number(wallet.solPrice) || 100,
-      lastRoast: wallet.lastRoast,
-      lastSeen: wallet.lastSeen,
-      createdAt: wallet.createdAt
-    };
-    
-    return res.json(walletData);
-  } catch (error) {
-    console.error('Error checking wallet in leaderboard:', error);
     return res.status(500).json({ error: 'Server error' });
   }
 });
