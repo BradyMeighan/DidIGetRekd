@@ -7,260 +7,198 @@ import numpy as np
 from datetime import datetime
 import base64
 from io import BytesIO
-import io
-import matplotlib.dates as mdates
-import matplotlib.ticker as ticker
 
 # Set matplotlib to non-interactive mode
 matplotlib.use('Agg')
 
-def generate_chart(data_json, dark_mode=False):
+def generate_chart(data_json, dark_mode=False, compact_mode=False, chart_type='balance'):
     """
-    Generate a line chart for wallet balance history or PnL
+    Generate a line chart for wallet balance or PnL history
     
     Args:
-        data_json (str): JSON string with chart options and data points
-        dark_mode (bool): Whether to use dark mode styling
+        data_json: JSON string or list containing chart data
+        dark_mode: Whether to use dark mode colors
+        compact_mode: Whether to use a more compact chart design
+        chart_type: Type of chart to generate ('balance' or 'pnl')
     
     Returns:
-        str: Base64 encoded PNG image
+        Base64 encoded PNG image
     """
     try:
-        # Parse the JSON data
-        data = json.loads(data_json)
+        # Parse the input data
+        if isinstance(data_json, str):
+            data = json.loads(data_json)
+        else:
+            data = data_json
         
-        # Extract chart options and data points
-        chart_type = data.get('chart_type', 'balance')
-        x_axis_label = data.get('x_axis_label', 'Time')
-        y_axis_label = data.get('y_axis_label', 'Balance')
-        tooltip_format = data.get('tooltip_format', '${value:.2f}')
-        title = data.get('title', 'Wallet Balance History')
-        show_value_labels = data.get('show_value_labels', False)
-        is_synthetic = data.get('is_synthetic', False)
-        data_points = data.get('data', [])
+        # Extract values and dates
+        dates = [point.get('label', '') for point in data]
+        values = [float(point.get('value', 0)) for point in data]
         
-        if not data_points:
-            raise ValueError("No data points provided")
+        if not values or len(values) < 2:
+            print("Warning: Not enough data points for chart.", file=sys.stderr)
+            # Create at least two points if we don't have enough
+            if len(values) == 0:
+                values = [0, 0]
+                dates = ['Start', 'End']
+            elif len(values) == 1:
+                values = [values[0], values[0]]
+                dates = ['Start', dates[0] if dates else 'End']
         
-        # Create figure with appropriate size and DPI
-        plt.figure(figsize=(10, 6), dpi=100)
+        # Determine if trend is positive (upward)
+        is_positive = values[-1] >= values[0]
         
-        # Parse dates and values
-        dates = []
-        values = []
-        
-        for point in data_points:
-            try:
-                date_str = point.get('timestamp', point.get('x', ''))
-                value = float(point.get('sol_balance', point.get('y', 0)))
-                
-                if date_str:
-                    date_obj = datetime.fromisoformat(date_str.replace('Z', '+00:00'))
-                    dates.append(date_obj)
-                    values.append(value)
-            except (ValueError, TypeError) as e:
-                print(f"Error parsing data point: {e}")
-        
-        if not dates or not values:
-            raise ValueError("No valid data points could be parsed")
-        
-        # Set style based on dark_mode
+        # Set style based on mode
         if dark_mode:
             plt.style.use('dark_background')
-            grid_color = 'gray'
-            line_color = '#4da6ff'  # Light blue
-            fill_color = 'rgba(77, 166, 255, 0.2)'  # Transparent light blue
+            positive_color = '#22c55e'  # Green
+            negative_color = '#ef4444'  # Red
+            grid_color = 'rgba(255, 255, 255, 0.1)'
             text_color = 'white'
-            indicator_color = 'yellow'
         else:
             plt.style.use('default')
-            grid_color = 'lightgray'
-            line_color = '#1a75ff'  # Darker blue
-            fill_color = 'rgba(26, 117, 255, 0.1)'  # Transparent blue
+            positive_color = '#16a34a'  # Green
+            negative_color = '#dc2626'  # Red
+            grid_color = 'rgba(0, 0, 0, 0.1)'
             text_color = 'black'
-            indicator_color = 'orangered'
         
-        # Determine if trend is positive, negative, or neutral
-        if len(values) > 1:
-            first_val = values[0]
-            last_val = values[-1]
-            if last_val > first_val:
-                trend = 'positive'
-                if chart_type == 'pnl':
-                    line_color = '#00b33c'  # Green
-                    fill_color = 'rgba(0, 179, 60, 0.2)'  # Transparent green
-            elif last_val < first_val:
-                trend = 'negative'
-                if chart_type == 'pnl':
-                    line_color = '#ff3333'  # Red
-                    fill_color = 'rgba(255, 51, 51, 0.2)'  # Transparent red
-            else:
-                trend = 'neutral'
-        else:
-            trend = 'neutral'
+        line_color = positive_color if is_positive else negative_color
+        area_color = positive_color if is_positive else negative_color
         
-        # Plot the line with gradient
-        plt.plot(dates, values, marker='o', linestyle='-', color=line_color, linewidth=2.5, 
-                 markerfacecolor='white', markeredgecolor=line_color, markersize=5)
+        # Create figure and axis with appropriate size
+        fig_width = 6 if compact_mode else 8
+        fig_height = 3 if compact_mode else 4
+        fig, ax = plt.subplots(figsize=(fig_width, fig_height), dpi=100)
         
-        # Fill area under the curve for balance charts
-        if chart_type == 'balance':
-            plt.fill_between(dates, 0, values, color=fill_color, alpha=0.9)
+        # Plot the line
+        marker_size = 4 if compact_mode else 5
+        line_width = 1.5 if compact_mode else 2
+        ax.plot(range(len(values)), values, color=line_color, linewidth=line_width, marker='o', markersize=marker_size)
         
-        # For PnL charts, fill above/below zero differently
-        elif chart_type == 'pnl':
-            above_zero = np.maximum(values, 0)
-            below_zero = np.minimum(values, 0)
+        # Handle area filling differently based on chart type
+        if chart_type == 'pnl':
+            # For PnL charts, fill above zero with green and below with red
+            ax.axhline(y=0, color=grid_color, linestyle='-', alpha=0.8, linewidth=1)
             
-            plt.fill_between(dates, 0, above_zero, color='rgba(0, 179, 60, 0.2)', alpha=0.9)
-            plt.fill_between(dates, 0, below_zero, color='rgba(255, 51, 51, 0.2)', alpha=0.9)
+            # Fill above/below zero with appropriate colors
+            ax.fill_between(
+                range(len(values)), 
+                values, 
+                0, 
+                where=[v >= 0 for v in values], 
+                color=positive_color, 
+                alpha=0.2
+            )
+            ax.fill_between(
+                range(len(values)), 
+                values, 
+                0, 
+                where=[v < 0 for v in values], 
+                color=negative_color, 
+                alpha=0.2
+            )
+        else:
+            # For balance charts, fill the whole area under the curve
+            ax.fill_between(
+                range(len(values)), 
+                values, 
+                alpha=0.2, 
+                color=area_color
+            )
         
-        # Format the x-axis to show dates nicely
-        ax = plt.gca()
+        # Configure x-axis
+        ax.set_xticks(range(len(dates)))
+        rotation = 30 if compact_mode else 45
+        ax.set_xticklabels(dates, rotation=rotation, ha='right', fontsize=8 if compact_mode else 10)
         
-        # Determine the best date format based on the date range
-        date_range = max(dates) - min(dates)
-        if date_range.days < 2:  # Less than 2 days
-            date_fmt = mdates.DateFormatter('%H:%M')
-            ax.xaxis.set_major_locator(mdates.HourLocator(interval=3))
-        elif date_range.days < 14:  # Less than 2 weeks
-            date_fmt = mdates.DateFormatter('%m/%d')
-            ax.xaxis.set_major_locator(mdates.DayLocator(interval=1))
-        elif date_range.days < 180:  # Less than 6 months
-            date_fmt = mdates.DateFormatter('%m/%d')
-            ax.xaxis.set_major_locator(mdates.WeekdayLocator(interval=2))
-        else:  # More than 6 months
-            date_fmt = mdates.DateFormatter('%b %Y')
-            ax.xaxis.set_major_locator(mdates.MonthLocator(interval=1))
-        
-        ax.xaxis.set_major_formatter(date_fmt)
-        plt.xticks(rotation=45)
+        # Configure y-axis with appropriate padding
+        if chart_type == 'pnl':
+            # For PnL, ensure we show the zero line
+            max_abs_val = max(abs(min(values)), abs(max(values)))
+            padding = max_abs_val * 0.2
+            y_min = min(min(values) - padding, -padding)  # Ensure some negative space is shown
+            y_max = max(max(values) + padding, padding)   # Ensure some positive space is shown
+            ax.set_ylim(y_min, y_max)
+        else:
+            # For balance, provide appropriate padding
+            min_val = min(values) * 0.9 if min(values) > 0 else min(values) * 1.1 if min(values) < 0 else 0
+            max_val = max(values) * 1.1
+            ax.set_ylim(min_val, max_val)
         
         # Add grid
-        plt.grid(True, linestyle='--', alpha=0.7, color=grid_color)
+        ax.grid(True, linestyle='--', alpha=0.3, color=grid_color)
         
-        # Set y-axis limits for better visualization
-        min_value = min(values)
-        max_value = max(values)
-        y_range = max_value - min_value
-        
-        # For PnL, ensure 0 is included in the range
-        if chart_type == 'pnl':
-            min_y = min(0, min_value - 0.1 * abs(y_range))
-            max_y = max(0, max_value + 0.1 * abs(y_range))
-        else:
-            # For balance, don't go below 0 (or very close to 0)
-            min_y = max(0, min_value - 0.05 * abs(y_range))
-            max_y = max_value + 0.1 * abs(y_range)
-        
-        # Ensure we don't divide by zero or have NaNs
-        if min_y == max_y:
-            if min_y == 0:
-                max_y = 0.1
+        # Set title and labels
+        if not compact_mode:
+            if chart_type == 'pnl':
+                ax.set_title('PnL Performance')
+                ax.set_ylabel('PnL %')
             else:
-                min_y = 0.9 * min_y
-                max_y = 1.1 * max_y
+                ax.set_title('SOL Balance Over Time')
+                ax.set_ylabel('SOL Balance')
         
-        plt.ylim(min_y, max_y)
-        
-        # Format y-axis with K, M suffixes for large values
-        if max_value >= 1000:
-            def y_fmt(x, pos):
-                if x >= 1_000_000:
-                    return f'{x/1_000_000:.1f}M'
-                elif x >= 1_000:
-                    return f'{x/1_000:.1f}K'
+        # Add value labels to the points if not in compact mode
+        if not compact_mode:
+            for i, v in enumerate(values):
+                if chart_type == 'pnl':
+                    label_text = f"{v:+.1f}%" if abs(v) < 100 else f"{v:+.0f}%"
                 else:
-                    return f'{x:.1f}'
-            
-            ax.yaxis.set_major_formatter(ticker.FuncFormatter(y_fmt))
+                    label_text = f"{v:.2f}" if v < 10 else f"{v:.1f}" if v < 100 else f"{v:.0f}"
+                
+                # Determine position of the label (above/below the point)
+                y_offset = 0.03 * (max_val - min_val) if 'min_val' in locals() else 0.03 * (y_max - y_min)
+                if i > 0 and i < len(values) - 1:
+                    # Only show labels for first, last, and min/max points to avoid clutter
+                    if v != max(values) and v != min(values):
+                        continue
+                
+                va = 'bottom' if (i == 0 or i == len(values) - 1 or v == max(values)) else 'top'
+                label_y = v + y_offset if va == 'bottom' else v - y_offset
+                
+                ax.annotate(
+                    label_text, 
+                    (i, label_y),
+                    textcoords="offset points",
+                    xytext=(0, 0),
+                    ha='center',
+                    va=va,
+                    fontsize=8,
+                    color=text_color,
+                    bbox=dict(boxstyle="round,pad=0.3", fc='white' if not dark_mode else 'black', alpha=0.6)
+                )
         
-        # Set labels and title
-        plt.xlabel(x_axis_label, fontsize=12, labelpad=10, color=text_color)
-        plt.ylabel(y_axis_label, fontsize=12, labelpad=10, color=text_color)
-        plt.title(title, fontsize=16, pad=20, color=text_color)
-        
-        # Add indicator for synthetic data if this is synthetic
-        if is_synthetic:
-            plt.figtext(0.99, 0.01, 'Estimated data', fontsize=8, 
-                      color=indicator_color, ha='right', style='italic')
-        
-        # Add value labels if requested
-        if show_value_labels:
-            for i, (date, value) in enumerate(zip(dates, values)):
-                # Only label first, last, min, max and a few points in between
-                if (i == 0 or i == len(values) - 1 or 
-                    value == max_value or value == min_value or 
-                    i % max(1, len(values) // 5) == 0):
-                    
-                    plt.annotate(
-                        f'{value:.2f}',
-                        (date, value),
-                        xytext=(0, 10),
-                        textcoords='offset points',
-                        ha='center',
-                        fontsize=9,
-                        color=text_color,
-                        bbox=dict(boxstyle='round,pad=0.3', fc='white' if not dark_mode else 'black', 
-                                 alpha=0.7, ec='none')
-                    )
-        
-        # Add a subtle watermark
-        plt.figtext(0.5, 0.5, 'Did I Just Get REK\'D?', fontsize=40, 
-                  color=grid_color, ha='center', va='center', alpha=0.07, rotation=30)
-        
-        # Tight layout for better spacing
+        # Tight layout to ensure all elements fit
         plt.tight_layout()
         
-        # Save the figure to a BytesIO object
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
+        # Save to BytesIO object instead of file
+        buf = BytesIO()
+        plt.savefig(buf, format='png', transparent=False)
         buf.seek(0)
         
-        # Encode the image to base64
-        img_str = base64.b64encode(buf.getvalue()).decode('utf-8')
+        # Encode as base64 for easy transfer
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        plt.close(fig)
         
-        # Clean up to prevent memory leaks
-        plt.close('all')
+        return img_base64
         
-        return img_str
-    
     except Exception as e:
-        print(f"Error generating chart: {e}")
-        # Create a simple error chart
-        plt.figure(figsize=(10, 6), dpi=100)
-        
-        if dark_mode:
-            plt.style.use('dark_background')
-            text_color = 'white'
-        else:
-            plt.style.use('default')
-            text_color = 'black'
-        
-        plt.text(0.5, 0.5, f"Error generating chart: {e}", 
-                 ha='center', va='center', fontsize=12, color=text_color)
-        
-        # Save the error image
-        buf = io.BytesIO()
-        plt.savefig(buf, format='png', bbox_inches='tight')
-        buf.seek(0)
-        img_str = base64.b64encode(buf.getvalue()).decode('utf-8')
-        plt.close('all')
-        
-        return img_str
+        print(f"Error generating chart: {e}", file=sys.stderr)
+        return None
 
 if __name__ == "__main__":
     # Get arguments
     if len(sys.argv) < 2:
-        print("Usage: python generate_chart.py '[{\"value\": 1.2, \"label\": \"Jan 1\"}, ...]' [dark_mode]")
+        print("Usage: python generate_chart.py '[{\"value\": 1.2, \"label\": \"Jan 1\"}, ...]' [dark_mode] [compact_mode] [chart_type]")
         sys.exit(1)
     
     data_json = sys.argv[1]
     dark_mode = len(sys.argv) > 2 and sys.argv[2].lower() == 'true'
+    compact_mode = len(sys.argv) > 3 and sys.argv[3].lower() == 'true'
+    chart_type = sys.argv[4] if len(sys.argv) > 4 else 'balance'
     
     # Generate and output chart
-    img_str = generate_chart(data_json, dark_mode)
-    if img_str:
-        print(img_str)
+    img_base64 = generate_chart(data_json, dark_mode, compact_mode, chart_type)
+    if img_base64:
+        print(img_base64)
     else:
         sys.exit(1) 

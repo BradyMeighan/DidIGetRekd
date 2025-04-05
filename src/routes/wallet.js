@@ -32,151 +32,170 @@ router.get('/test', (req, res) => {
 /**
  * POST /api/wallet/chart
  * Generate a chart from transaction data using Node.js Canvas
- * Also support GET /api/wallet/chart?address=... for direct data fetching
  * IMPORTANT: This route must be defined BEFORE the /:address routes
  */
 router.post('/chart', async (req, res) => {
   try {
-    const { data, darkMode, address, timeRange } = req.body;
+    const { data, darkMode, compactMode, chartType, address, timeRange } = req.body;
     
-    // If an address is provided without data, fetch the chart data
+    console.log('Chart request received:', { 
+      dataLength: data?.length || 0, 
+      darkMode,
+      compactMode,
+      chartType,
+      address,
+      timeRange,
+      sampleData: data?.slice(0, 2) 
+    });
+    
+    // If address and timeRange are provided, fetch data from Flipside
+    // This allows us to get chart data directly from the chart endpoint
     if (address && !data) {
-      console.log(`Fetching chart data for address ${address} with time range ${timeRange || 'all'}`);
-      
+      console.log(`Fetching chart data for wallet ${address} with timeRange ${timeRange || 'all'}`);
       try {
-        // Fetch chart data from wallet service
-        const chartData = await walletService.getWalletBalanceChartData(address, timeRange);
+        const chartData = await walletService.getWalletBalanceChartData(address, timeRange || 'all');
         
         if (!chartData || chartData.length === 0) {
-          console.log('No chart data found for wallet', address);
-          return res.status(404).json({ 
-            error: 'No chart data found for this wallet'
+          return res.status(400).json({ 
+            error: 'No chart data available for this wallet', 
+            success: false 
           });
         }
         
-        console.log(`Retrieved ${chartData.length} data points for chart`);
+        // Transform data to format expected by chart generator
+        const transformedData = chartData.map(point => ({
+          value: chartType === 'pnl' 
+            ? calculatePnLPercentage(chartData[0].sol_balance, point.sol_balance) 
+            : point.sol_balance,
+          label: formatDateLabel(point.timestamp, timeRange || 'all')
+        }));
         
-        // Determine if data is synthetic by checking if it has a source property
-        const isSynthetic = chartData.some(point => point.synthetic) || 
-                           chartData.length < 5 ||
-                           chartData.every(point => point.timestamp && point.timestamp.includes('T00:00:00'));
+        // Generate chart with the fetched data
+        const imageData = generateChart(
+          transformedData, 
+          Boolean(darkMode), 
+          Boolean(compactMode), 
+          chartType || 'balance'
+        );
         
-        // Transform the data for chart generation
-        const chartPayload = {
-          chart_type: req.body.chartType || 'balance',
-          title: req.body.title || 'SOL Balance History',
-          x_axis_label: 'Date',
-          y_axis_label: 'SOL Balance',
-          tooltip_format: '${value} SOL',
-          show_value_labels: true,
-          is_synthetic: isSynthetic,
-          data: chartData
-        };
+        console.log('Chart generated successfully with Flipside data, image data length:', imageData?.length || 0);
         
-        // Generate the chart using the chart service
-        const chartImageBase64 = await generateChart(chartPayload, darkMode);
-        
-        if (!chartImageBase64) {
-          console.error('Failed to generate chart');
-          return res.status(500).json({ error: 'Failed to generate chart' });
-        }
-        
-        // Return both the image and the data
         return res.json({
-          chart: chartImageBase64,
-          data: chartData,
-          is_synthetic: isSynthetic
+          success: true,
+          imageData
         });
       } catch (error) {
-        console.error('Error fetching chart data:', error);
-        return res.status(500).json({ error: 'Error fetching chart data' });
+        console.error('Error fetching chart data from Flipside:', error);
+        return res.status(500).json({ 
+          error: 'Failed to fetch chart data', 
+          details: error.message,
+          success: false 
+        });
       }
     }
     
-    // If data is provided directly, use it to generate the chart
+    // Original functionality for cases where data is provided directly
     if (!data || !Array.isArray(data)) {
-      return res.status(400).json({ error: 'Invalid chart data' });
+      console.error('Invalid chart data format:', data);
+      return res.status(400).json({ error: 'Invalid chart data', success: false });
     }
     
-    console.log(`Generating chart with ${data.length} data points`);
-    
-    // Determine if data might be synthetic based on patterns in the data
-    const isSynthetic = data.some(point => point.synthetic) || 
-                      data.length < 5 ||
-                      (data.every(point => point.timestamp) && 
-                       data.filter(point => point.timestamp.includes('T00:00:00')).length === data.length);
-    
-    // Prepare the chart configuration
-    const chartConfig = {
-      chart_type: req.body.chartType || 'balance',
-      title: req.body.title || 'SOL Balance History',
-      x_axis_label: req.body.xAxisLabel || 'Date',
-      y_axis_label: req.body.yAxisLabel || 'SOL Balance',
-      tooltip_format: req.body.tooltipFormat || '${value} SOL',
-      show_value_labels: req.body.showValueLabels || false,
-      is_synthetic: isSynthetic,
-      data: data
-    };
-    
-    // Generate the chart
-    const chartImageBase64 = await generateChart(chartConfig, darkMode);
-    
-    if (!chartImageBase64) {
-      return res.status(500).json({ error: 'Failed to generate chart' });
-    }
-    
-    res.json({
-      chart: chartImageBase64,
-      is_synthetic: isSynthetic
+    // Clean the data to ensure it has correct format
+    const cleanData = data.map(point => {
+      const value = parseFloat(point.value || 0) || 0;
+      const label = String(point.label || '');
+      
+      console.log('Processing data point:', { 
+        originalValue: point.value, 
+        parsedValue: value,
+        originalLabel: point.label,
+        cleanLabel: label
+      });
+      
+      return { value, label };
     });
+    
+    // Generate chart using our JavaScript chart generator
+    console.log(`Generating chart with ${cleanData.length} data points:`, cleanData);
+    
+    try {
+      const imageData = generateChart(
+        cleanData, 
+        Boolean(darkMode), 
+        Boolean(compactMode), 
+        chartType || 'balance'
+      );
+      console.log('Chart generated successfully, image data length:', imageData?.length || 0);
+      
+      // Return the base64 encoded image with explicit success flag
+      const response = {
+        success: true,
+        imageData
+      };
+      
+      console.log('Sending response with success:', response.success);
+      return res.json(response);
+    } catch (chartError) {
+      console.error('Error in chart generation:', chartError);
+      return res.status(500).json({ 
+        error: 'Chart generation failed', 
+        details: chartError.message,
+        success: false 
+      });
+    }
   } catch (error) {
-    console.error('Error generating chart:', error);
-    res.status(500).json({ error: 'Failed to generate chart' });
+    console.error('Error in chart endpoint:', error);
+    return res.status(500).json({ 
+      error: 'Failed to generate chart', 
+      details: error.message,
+      success: false
+    });
   }
 });
 
 /**
- * GET /api/wallet/chart
- * Get chart data for a wallet address
+ * Format date label based on time range
+ * @param {string|number} timestamp - ISO date string or timestamp
+ * @param {string} timeRange - all, year, month, week
+ * @returns {string} Formatted date string
  */
-router.get('/chart', async (req, res) => {
+function formatDateLabel(timestamp, timeRange) {
   try {
-    const { address, timeRange } = req.query;
-    
-    if (!address) {
-      return res.status(400).json({ error: 'Wallet address is required' });
+    const date = new Date(timestamp);
+    if (isNaN(date.getTime())) {
+      return String(timestamp).substring(0, 10);
     }
     
-    console.log(`Fetching chart data for wallet ${address} with time range ${timeRange || 'all'}`);
-    
-    // Get chart data for the wallet
-    const chartData = await walletService.getWalletBalanceChartData(address, timeRange);
-    
-    if (!chartData || chartData.length === 0) {
-      console.log('No chart data found for wallet', address);
-      return res.status(404).json({ 
-        error: 'No chart data found for this wallet',
-        data: []
-      });
+    switch(timeRange) {
+      case 'week':
+        return date.toLocaleDateString('en-US', { weekday: 'short' });
+      case 'month':
+        return date.toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+      case 'year':
+        return date.toLocaleDateString('en-US', { month: 'short' });
+      default: // 'all' or any other value
+        return date.toLocaleDateString('en-US', { month: 'short', year: '2-digit' });
     }
-    
-    // Determine if data is synthetic based on patterns
-    const isSynthetic = chartData.some(point => point.synthetic) || 
-                       chartData.length < 5 ||
-                       chartData.every(point => point.timestamp && point.timestamp.includes('T00:00:00'));
-    
-    console.log(`Returning ${chartData.length} chart data points, synthetic: ${isSynthetic}`);
-    
-    res.json({
-      data: chartData,
-      is_synthetic: isSynthetic
-    });
-    
-  } catch (error) {
-    console.error('Error fetching chart data:', error);
-    res.status(500).json({ error: 'Error fetching chart data' });
+  } catch (e) {
+    console.error('Error formatting date label:', e);
+    return String(timestamp);
   }
-});
+}
+
+/**
+ * Calculate PnL percentage between first and current balance
+ * @param {number} firstBalance - Starting balance
+ * @param {number} currentBalance - Current balance
+ * @returns {number} PnL percentage
+ */
+function calculatePnLPercentage(firstBalance, currentBalance) {
+  if (!firstBalance || firstBalance === 0) return 0;
+  
+  const pnlPercent = ((currentBalance - firstBalance) / firstBalance) * 100;
+  
+  // Round to 1 decimal place
+  return Math.round(pnlPercent * 10) / 10;
+}
 
 /**
  * @route GET /api/wallet/:address

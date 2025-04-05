@@ -2241,15 +2241,6 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
   try {
     console.log(`Getting wallet balance chart data for ${address} with time range ${timeRange}`);
     
-    // Get current balance first for synthetic data creation if needed
-    let currentBalance = 0;
-    try {
-      currentBalance = await getWalletCurrentBalance(address);
-      console.log(`Current SOL balance for synthetic data: ${currentBalance}`);
-    } catch (error) {
-      console.error('Error getting current balance:', error.message);
-    }
-    
     // Try to get data from Helius first (more reliable)
     if (process.env.HELIUS_API_KEY) {
       try {
@@ -2257,21 +2248,20 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
         const apiKey = process.env.HELIUS_API_KEY;
         const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
         
-        // First get the current SOL balance if not already fetched
-        if (currentBalance <= 0) {
-          const balanceResponse = await makeApiCallWithRetry(async () => 
-            axios.post(rpcUrl, {
-              jsonrpc: "2.0",
-              id: 1,
-              method: "getBalance",
-              params: [address]
-            })
-          );
-          
-          const currentBalanceLamports = balanceResponse.data?.result?.value || 0;
-          currentBalance = currentBalanceLamports / 1000000000; // Convert to SOL
-          console.log(`Current SOL balance from Helius: ${currentBalance}`);
-        }
+        // First get the current SOL balance
+        const balanceResponse = await makeApiCallWithRetry(async () => 
+          axios.post(rpcUrl, {
+            jsonrpc: "2.0",
+            id: 1,
+            method: "getBalance",
+            params: [address]
+          })
+        );
+        
+        const currentBalanceLamports = balanceResponse.data?.result?.value || 0;
+        const currentBalance = currentBalanceLamports / 1000000000; // Convert to SOL
+        
+        console.log(`Current SOL balance: ${currentBalance}`);
         
         // Get transaction signatures for this address
         const signaturesResponse = await makeApiCallWithRetry(async () => 
@@ -2284,8 +2274,8 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
         );
         
         if (!signaturesResponse.data?.result || signaturesResponse.data.result.length === 0) {
-          console.log('No transaction signatures found, creating synthetic data');
-          return createSyntheticBalanceData(address, currentBalance, timeRange);
+          console.log('No transaction signatures found, falling back to mock data');
+          return generateMockChartData(address, timeRange);
         }
         
         const signatures = signaturesResponse.data.result;
@@ -2359,8 +2349,8 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
         console.log(`Filtered to ${filteredTxs.length} transactions within time range`);
         
         if (filteredTxs.length === 0) {
-          console.log('No transactions in the selected time range, creating synthetic data');
-          return createSyntheticBalanceData(address, currentBalance, timeRange);
+          console.log('No transactions in the selected time range');
+          return generateMockChartData(address, timeRange);
         }
         
         // Sort by timestamp (oldest first)
@@ -2392,38 +2382,24 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
         // Convert to array and ensure we have a good number of points
         let chartData = Array.from(dailyBalances.values());
         
-        // If we have too few points, add synthetic points
+        // If we have too few points, add the current balance at different times
         if (chartData.length < 5) {
-          console.log('Adding additional synthetic points, have only', chartData.length);
-          const syntheticData = createSyntheticBalanceData(address, currentBalance, timeRange, chartData);
+          console.log('Adding additional points based on current balance');
           
-          // Merge the real data with the synthetic data
-          const allTimestamps = new Set([
-            ...chartData.map(point => point.timestamp),
-            ...syntheticData.map(point => point.timestamp)
-          ]);
+          // Create points at regular intervals
+          const intervalCount = 5 - chartData.length;
+          const timeRangeMs = now.getTime() - cutoffDate.getTime();
           
-          // Create a map with all data points
-          const mergedDataMap = new Map();
+          for (let i = 1; i <= intervalCount; i++) {
+            const pointDate = new Date(now.getTime() - (timeRangeMs * i / (intervalCount + 1)));
+            chartData.push({
+              timestamp: pointDate.toISOString(),
+              sol_balance: currentBalance
+            });
+          }
           
-          // Add real data points first
-          chartData.forEach(point => {
-            mergedDataMap.set(point.timestamp, point);
-          });
-          
-          // Add synthetic points where real data doesn't exist
-          syntheticData.forEach(point => {
-            if (!mergedDataMap.has(point.timestamp)) {
-              mergedDataMap.set(point.timestamp, point);
-            }
-          });
-          
-          // Convert back to array and sort
-          chartData = Array.from(mergedDataMap.values()).sort((a, b) => 
-            new Date(a.timestamp) - new Date(b.timestamp)
-          );
-          
-          console.log(`Merged data points: ${chartData.length}`);
+          // Resort by timestamp
+          chartData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
         }
         
         console.log(`Generated ${chartData.length} chart data points from Helius data`);
@@ -2436,8 +2412,8 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
     
     // Check if Flipside API key is available
     if (!process.env.FLIPSIDE_API_KEY) {
-      console.log('No FLIPSIDE_API_KEY found in environment, using synthetic chart data');
-      return createSyntheticBalanceData(address, currentBalance, timeRange);
+      console.log('No FLIPSIDE_API_KEY found in environment, using mock chart data');
+      return generateMockChartData(address, timeRange);
     }
     
     // Define time filter based on timeRange
@@ -2496,8 +2472,8 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
       const results = await runFlipsideQuery(sql);
       
       if (!results || !results.rows || results.rows.length === 0) {
-        console.log(`No balance chart data found for wallet ${address}, using synthetic data`);
-        return createSyntheticBalanceData(address, currentBalance, timeRange);
+        console.log(`No balance chart data found for wallet ${address}, using mock data`);
+        return generateMockChartData(address, timeRange);
       }
       
       // Transform data format
@@ -2507,143 +2483,16 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
       }));
       
       console.log(`Retrieved ${chartData.length} chart data points for wallet ${address}`);
-      
-      // If we have too few points, add synthetic points
-      if (chartData.length < 5) {
-        console.log('Adding additional synthetic points to Flipside data');
-        const syntheticData = createSyntheticBalanceData(address, currentBalance, timeRange, chartData);
-        
-        // Merge the real data with the synthetic data
-        const allData = [...chartData, ...syntheticData];
-        
-        // Remove duplicates by timestamp
-        const uniqueData = [];
-        const timestamps = new Set();
-        
-        for (const point of allData) {
-          if (!timestamps.has(point.timestamp)) {
-            timestamps.add(point.timestamp);
-            uniqueData.push(point);
-          }
-        }
-        
-        // Sort by timestamp
-        uniqueData.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-        
-        console.log(`Merged data points: ${uniqueData.length}`);
-        return uniqueData;
-      }
-      
       return chartData;
     } catch (error) {
       console.error('Error in Flipside query for chart data:', error.message);
-      console.log('Using synthetic chart data as fallback');
-      return createSyntheticBalanceData(address, currentBalance, timeRange);
+      console.log('Using mock chart data as fallback');
+      return generateMockChartData(address, timeRange);
     }
   } catch (error) {
     console.error('Error getting wallet balance chart data:', error.message);
-    // Try to get the current balance for synthetic data
-    try {
-      const balance = await getWalletCurrentBalance(address);
-      return createSyntheticBalanceData(address, balance, timeRange);
-    } catch (err) {
-      return generateMockChartData(address, timeRange);
-    }
+    return generateMockChartData(address, timeRange);
   }
-}
-
-/**
- * Create synthetic balance history data when real data is not available
- * @param {string} address - Wallet address
- * @param {number} currentBalance - Current SOL balance
- * @param {string} timeRange - Time range ('24h', '7d', '1mo', '3mo', 'all')
- * @param {Array} existingData - Optional existing data points to fill gaps around
- * @returns {Array} Array of synthetic data points
- */
-function createSyntheticBalanceData(address, currentBalance, timeRange = 'all', existingData = []) {
-  console.log(`Creating synthetic balance data for ${address} with current balance ${currentBalance}`);
-  
-  // Generate time-appropriate synthetic data
-  const now = new Date();
-  
-  // Determine number of points and time span based on timeRange
-  let days, points;
-  switch (timeRange) {
-    case '24h':
-      days = 1;
-      points = 8; // Every 3 hours
-      break;
-    case '7d':
-      days = 7;
-      points = 14; // Twice daily
-      break;
-    case '1mo':
-      days = 30;
-      points = 15; // Every other day
-      break;
-    case '3mo':
-      days = 90;
-      points = 15; // Every 6 days
-      break;
-    case 'all':
-    default:
-      days = 90;
-      points = 15; // Every 6 days
-      break;
-  }
-  
-  // Use address as a seed for deterministic random number generation
-  const seed = address.split('').reduce((total, char) => total + char.charCodeAt(0), 0);
-  
-  // Pseudorandom number generator function
-  const random = (min, max, offset = 0) => {
-    const x = Math.sin((seed + offset) * 9999) * 10000;
-    return min + (Math.abs(x - Math.floor(x))) * (max - min);
-  };
-  
-  // Create realistic-looking data with slight variations
-  const syntheticData = [];
-  
-  // Start with a slight variation from the current balance
-  const initialBalance = currentBalance * (1 - random(0.05, 0.2, 1000));
-  let previousBalance = initialBalance;
-  
-  for (let i = 0; i < points; i++) {
-    // Calculate timestamp for this point
-    const pointDate = new Date(now);
-    pointDate.setDate(now.getDate() - days * (points - 1 - i) / (points - 1));
-    
-    // For newer points, make them closer to current balance
-    // For older points, add more randomness
-    const progressToPresent = i / (points - 1);
-    const volatility = 0.02 * (1 - progressToPresent) + 0.005;
-    
-    // Trending towards current balance
-    const targetBalance = initialBalance * (1 - progressToPresent) + currentBalance * progressToPresent;
-    
-    // Add random noise
-    const noiseRange = previousBalance * volatility;
-    const noise = random(-noiseRange, noiseRange, i * 1000);
-    
-    // Calculate this point's balance
-    const pointBalance = targetBalance + noise;
-    previousBalance = pointBalance;
-    
-    // Add the data point
-    syntheticData.push({
-      timestamp: pointDate.toISOString(),
-      sol_balance: Math.max(0, pointBalance) // Ensure no negative balances
-    });
-  }
-  
-  // Update the last point to match current balance exactly
-  syntheticData[syntheticData.length - 1] = {
-    timestamp: now.toISOString(),
-    sol_balance: currentBalance
-  };
-  
-  console.log(`Generated ${syntheticData.length} synthetic data points`);
-  return syntheticData;
 }
 
 /**
