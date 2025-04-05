@@ -28,7 +28,7 @@ router.get('/', async (req, res) => {
     const leaderboard = await Wallet.find({})
       .sort(sortObj)
       .limit(limit)
-      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen lastUpdated createdAt tokens achievements recentTransactions txHistory weeklyTxData')
+      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen createdAt')
       .lean();
       
     // Process wallets for response and ensure numeric fields are numbers
@@ -43,13 +43,7 @@ router.get('/', async (req, res) => {
         nativeBalance: Number(wallet.nativeBalance) || 0,
         solPrice: Number(wallet.solPrice) || 100,
         lastRoast: wallet.lastRoast,
-        lastSeen: wallet.lastSeen,
-        lastUpdated: wallet.lastUpdated,
-        tokens: wallet.tokens || [],
-        achievements: wallet.achievements || [],
-        recentTransactions: wallet.recentTransactions || [],
-        txHistory: wallet.txHistory || [],
-        weeklyTxData: wallet.weeklyTxData || []
+        lastSeen: wallet.lastSeen
       };
     });
     
@@ -161,34 +155,12 @@ router.post('/:address/leaderboard', async (req, res) => {
       walletValue: walletValue || 0,
       nativeBalance: nativeBalance || 0,
       solPrice: solPrice || 0,
-      lastSeen: new Date(),
-      lastUpdated: new Date()
+      lastSeen: new Date()
     };
     
     // Add lastRoast to roasts array if provided
     if (lastRoast) {
       updateData.lastRoast = lastRoast;
-    }
-    
-    // Save additional wallet data if available
-    if (req.body.tokens && Array.isArray(req.body.tokens)) {
-      updateData.tokens = req.body.tokens;
-    }
-    
-    if (req.body.achievements && Array.isArray(req.body.achievements)) {
-      updateData.achievements = req.body.achievements;
-    }
-    
-    if (req.body.recentTransactions && Array.isArray(req.body.recentTransactions)) {
-      updateData.recentTransactions = req.body.recentTransactions;
-    }
-    
-    if (req.body.txHistory && Array.isArray(req.body.txHistory)) {
-      updateData.txHistory = req.body.txHistory;
-    }
-    
-    if (req.body.weeklyTxData && Array.isArray(req.body.weeklyTxData)) {
-      updateData.weeklyTxData = req.body.weeklyTxData;
     }
     
     const result = await Wallet.findOneAndUpdate(
@@ -220,6 +192,49 @@ router.post('/:address/leaderboard', async (req, res) => {
     });
   } catch (error) {
     console.error('Error saving to leaderboard:', error);
+    return res.status(500).json({ error: 'Server error' });
+  }
+});
+
+/**
+ * GET /api/leaderboard/:address/check
+ * Check if a wallet is already in the leaderboard database
+ */
+router.get('/:address/check', async (req, res) => {
+  try {
+    const { address } = req.params;
+    
+    if (!address) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+    
+    // Find the wallet by address
+    const wallet = await Wallet.findOne({ address })
+      .select('address score totalTrades gasSpent pnl walletValue nativeBalance solPrice lastRoast lastSeen createdAt')
+      .lean();
+    
+    if (!wallet) {
+      return res.status(404).json({ error: 'Wallet not found' });
+    }
+    
+    // Process wallet data for response
+    const walletData = {
+      address: wallet.address,
+      score: Number(wallet.score) || 0,
+      totalTrades: Number(wallet.totalTrades) || 0,
+      gasSpent: Number(wallet.gasSpent) || 0,
+      pnl: Number(wallet.pnl) || 0,
+      walletValue: Number(wallet.walletValue) || 0,
+      nativeBalance: Number(wallet.nativeBalance) || 0,
+      solPrice: Number(wallet.solPrice) || 100,
+      lastRoast: wallet.lastRoast,
+      lastSeen: wallet.lastSeen,
+      createdAt: wallet.createdAt
+    };
+    
+    return res.json(walletData);
+  } catch (error) {
+    console.error('Error checking wallet in leaderboard:', error);
     return res.status(500).json({ error: 'Server error' });
   }
 });
