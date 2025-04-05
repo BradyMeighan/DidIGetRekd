@@ -2,6 +2,8 @@ const express = require('express');
 const router = express.Router();
 const walletService = require('../services/walletService');
 const axios = require('axios');
+const { PythonShell } = require('python-shell');
+const path = require('path');
 
 /**
  * @route GET /api/wallet/test
@@ -591,6 +593,55 @@ router.get('/token/:mintAddress', async (req, res) => {
       error: 'Error getting token info',
       message: error.message
     });
+  }
+});
+
+/**
+ * POST /api/wallet/chart
+ * Generate a chart from transaction data using matplotlib
+ */
+router.post('/chart', async (req, res) => {
+  try {
+    const { data, darkMode } = req.body;
+    
+    if (!data || !Array.isArray(data)) {
+      return res.status(400).json({ error: 'Invalid chart data' });
+    }
+    
+    // Clean the data to ensure it has correct format
+    const cleanData = data.map(point => ({
+      value: parseFloat(point.value || 0) || 0,
+      label: String(point.label || '')
+    }));
+    
+    // Prepare options for PythonShell
+    const options = {
+      mode: 'text',
+      pythonPath: 'python', // Use system python
+      scriptPath: path.join(__dirname, '../charts'),
+      args: [
+        JSON.stringify(cleanData),
+        Boolean(darkMode).toString()
+      ]
+    };
+    
+    // Call the Python script
+    const result = await new Promise((resolve, reject) => {
+      PythonShell.run('generate_chart.py', options, (err, results) => {
+        if (err) return reject(err);
+        if (!results || results.length === 0) return reject(new Error('No chart data returned'));
+        resolve(results[0]); // Get the base64 string from the output
+      });
+    });
+    
+    // Return the base64 encoded image
+    return res.json({
+      success: true,
+      imageData: result
+    });
+  } catch (error) {
+    console.error('Error generating chart:', error);
+    return res.status(500).json({ error: 'Failed to generate chart', details: error.message });
   }
 });
 

@@ -16,7 +16,8 @@
     "framer-motion": "^12.6.3",
     "mongodb": "^6.3.0",
     "mongoose": "^8.0.1",
-    "openai": "^4.0.0"
+    "openai": "^4.0.0",
+    "python-shell": "^5.0.0"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
