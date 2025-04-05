@@ -324,12 +324,8 @@ async function fetchWalletData(address) {
     const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
     const walletData = { address };
     
-    console.log('=== Starting Wallet Data Fetch ===');
-    console.log(`Wallet Address: ${address}`);
-    console.log(`RPC URL: ${rpcUrl}`);
-    
-    // 1. Get SOL balance
-    console.log('\n1. Fetching SOL balance...');
+    // 1. Get current SOL balance
+    console.log('Fetching SOL balance...');
     const balanceResponse = await axios.post(rpcUrl, {
       jsonrpc: "2.0",
       id: 1,
@@ -337,21 +333,108 @@ async function fetchWalletData(address) {
       params: [address]
     });
     
-    console.log('Balance Response:', {
-      status: balanceResponse.status,
-      statusText: balanceResponse.statusText,
-      data: balanceResponse.data
-    });
-    
     if (balanceResponse.data?.result?.value) {
+      // Convert lamports to SOL (1 SOL = 1,000,000,000 lamports)
       walletData.nativeBalance = balanceResponse.data.result.value / 1000000000;
       console.log(`Native SOL balance: ${walletData.nativeBalance} SOL`);
-    } else {
-      console.log('No SOL balance found or error in response:', balanceResponse.data);
+    }
+
+    // Initialize balance history array
+    walletData.balanceHistory = [];
+    
+    // 2. Get transaction signatures with getSignaturesForAddress
+    console.log('Fetching transaction signatures...');
+    const signaturesResponse = await axios.post(rpcUrl, {
+      jsonrpc: "2.0",
+      id: 3,
+      method: "getSignaturesForAddress",
+      params: [address, { limit: 100 }] // Increased limit for better historical data
+    });
+    
+    if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
+      walletData.signatures = signaturesResponse.data.result;
+      console.log(`Found ${walletData.signatures.length} transaction signatures`);
+      
+      // Get full transaction details for historical balance tracking
+      const transactionsToFetch = walletData.signatures;
+      console.log(`Fetching details for ${transactionsToFetch.length} transactions...`);
+      
+      walletData.transactions = [];
+      
+      for (const sigData of transactionsToFetch) {
+        try {
+          const txResponse = await axios.post(rpcUrl, {
+            jsonrpc: "2.0",
+            id: 4,
+            method: "getTransaction",
+            params: [
+              sigData.signature,
+              { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+            ]
+          });
+          
+          if (txResponse.data?.result) {
+            const tx = txResponse.data.result;
+            
+            // Add metadata and balance info
+            tx.blockTime = tx.blockTime || sigData.blockTime;
+            tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
+            tx.successful = sigData.err === null;
+            tx.fee = tx.meta?.fee || 0;
+            tx.signature = sigData.signature;
+            
+            // Extract postBalance in SOL
+            if (tx.meta?.postBalances && tx.meta.postBalances.length > 0) {
+              const accountIndex = tx.transaction.message.accountKeys.findIndex(key => key === address);
+              if (accountIndex !== -1 && tx.meta.postBalances[accountIndex]) {
+                tx.postBalance = tx.meta.postBalances[accountIndex] / 1000000000; // Convert lamports to SOL
+                
+                // Add to balance history
+                walletData.balanceHistory.push({
+                  timestamp: tx.timestamp,
+                  balance: tx.postBalance,
+                  signature: tx.signature
+                });
+              }
+            }
+            
+            // Extract transaction type and description
+            if (tx.transaction?.message?.instructions) {
+              const instructions = tx.transaction.message.instructions;
+              let description = "";
+              
+              for (const instruction of instructions) {
+                if (instruction.program === 'system' && instruction.parsed?.type === 'transfer') {
+                  const amount = instruction.parsed.info.lamports / 1000000000;
+                  const source = instruction.parsed.info.source;
+                  const destination = instruction.parsed.info.destination;
+                  const isReceiving = destination === address;
+                  
+                  description = isReceiving 
+                    ? `Received ${amount.toFixed(6)} SOL from ${source.slice(0, 4)}...`
+                    : `Sent ${amount.toFixed(6)} SOL to ${destination.slice(0, 4)}...`;
+                }
+              }
+              
+              tx.description = description || (tx.meta?.innerInstructions?.length > 0 ? "Complex Transaction" : "SOL Transfer");
+            }
+            
+            walletData.transactions.push(tx);
+          }
+        } catch (err) {
+          console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
+        }
+      }
+      
+      // Sort balance history by timestamp
+      walletData.balanceHistory.sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+      
+      console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
+      console.log(`Balance history points: ${walletData.balanceHistory.length}`);
     }
     
-    // 2. Get token accounts
-    console.log('\n2. Fetching token accounts...');
+    // 3. Get token accounts
+    console.log('Fetching token accounts...');
     const tokenResponse = await axios.post(rpcUrl, {
       jsonrpc: "2.0",
       id: 2,
@@ -363,16 +446,11 @@ async function fetchWalletData(address) {
       ]
     });
     
-    console.log('Token Response:', {
-      status: tokenResponse.status,
-      statusText: tokenResponse.statusText,
-      dataLength: tokenResponse.data?.result?.value?.length || 0
-    });
-    
     if (tokenResponse.data?.result?.value) {
       walletData.tokenAccounts = tokenResponse.data.result.value;
       console.log(`Found ${walletData.tokenAccounts.length} token accounts`);
       
+      // Log the first token account for debugging
       if (walletData.tokenAccounts.length > 0) {
         console.log('Sample token account:', JSON.stringify(walletData.tokenAccounts[0]?.account?.data?.parsed?.info || {}, null, 2));
       }
@@ -380,128 +458,27 @@ async function fetchWalletData(address) {
       console.log('No token accounts found or error in response:', tokenResponse.data);
     }
     
-    // 3. Get transaction signatures
-    console.log('\n3. Fetching transaction signatures...');
-    let signaturesFound = false;
-    
-    try {
-      console.log(`Making RPC request to ${rpcUrl} for getSignaturesForAddress`);
-      const signaturesResponse = await axios.post(rpcUrl, {
-        jsonrpc: "2.0",
-        id: 3,
-        method: "getSignaturesForAddress",
-        params: [address, { limit: 50 }]
-      });
-      
-      console.log('Signatures Response:', {
-        status: signaturesResponse.status,
-        statusText: signaturesResponse.statusText,
-        resultLength: signaturesResponse.data?.result?.length || 0
-      });
-      
-      if (signaturesResponse.data?.result && signaturesResponse.data.result.length > 0) {
-        walletData.signatures = signaturesResponse.data.result;
-        signaturesFound = true;
-        console.log(`Found ${walletData.signatures.length} transaction signatures`);
+    // 4. LAST RESORT: If we still don't have transactions, try Helius transactions endpoint
+    if (!walletData.transactions || walletData.transactions.length === 0) {
+      console.log('No transactions from RPC methods, trying Helius transactions endpoint...');
+      try {
+        const txUrl = `https://api.helius.xyz/v0/addresses/${address}/transactions?api-key=${apiKey}&limit=20`;
+        const txResponse = await axios.get(txUrl);
         
-        // Get full transaction details
-        const transactionsToFetch = walletData.signatures.slice(0, 10);
-        console.log(`\n4. Fetching details for ${transactionsToFetch.length} recent transactions...`);
-        
-        walletData.transactions = [];
-        
-        for (const sigData of transactionsToFetch) {
-          try {
-            console.log(`Fetching transaction: ${sigData.signature}`);
-            const txResponse = await axios.post(rpcUrl, {
-              jsonrpc: "2.0",
-              id: 4,
-              method: "getTransaction",
-              params: [
-                sigData.signature,
-                { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
-              ]
-            });
-            
-            console.log('Transaction Response:', {
-              status: txResponse.status,
-              statusText: txResponse.statusText,
-              hasResult: !!txResponse.data?.result
-            });
-            
-            if (txResponse.data?.result) {
-              const tx = txResponse.data.result;
-              tx.blockTime = tx.blockTime || sigData.blockTime;
-              tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
-              tx.successful = sigData.err === null;
-              tx.fee = tx.meta?.fee || 0;
-              tx.signature = sigData.signature;
-              
-              // Extract transaction type and description
-              if (tx.transaction?.message?.instructions) {
-                const instructions = tx.transaction.message.instructions;
-                let description = "";
-                
-                for (const instruction of instructions) {
-                  if (instruction.program === 'system') {
-                    if (instruction.parsed?.type === 'transfer') {
-                      const amount = instruction.parsed.info.lamports / 1000000000;
-                      const source = instruction.parsed.info.source;
-                      const destination = instruction.parsed.info.destination;
-                      const isReceiving = destination === address;
-                      
-                      description = isReceiving 
-                        ? `Received ${amount.toFixed(6)} SOL from ${source.slice(0, 4)}...`
-                        : `Sent ${amount.toFixed(6)} SOL to ${destination.slice(0, 4)}...`;
-                    }
-                  }
-                }
-                
-                if (!description) {
-                  description = tx.meta?.innerInstructions?.length > 0
-                    ? "Complex Transaction"
-                    : "SOL Transfer";
-                }
-                
-                tx.description = description;
-              }
-              
-              walletData.transactions.push(tx);
-            }
-          } catch (err) {
-            console.error(`Error fetching transaction ${sigData.signature}:`, {
-              message: err.message,
-              response: err.response?.data
-            });
-          }
+        if (txResponse.data?.transactions && txResponse.data.transactions.length > 0) {
+          walletData.transactions = txResponse.data.transactions;
+          console.log(`Found ${walletData.transactions.length} transactions from Helius endpoint`);
+        } else {
+          console.log('No transactions found from Helius transactions endpoint either.');
         }
-        
-        console.log(`Successfully retrieved ${walletData.transactions.length} transaction details`);
-      } else {
-        console.log('No transaction signatures found in response.');
+      } catch (err) {
+        console.error('Error with Helius transactions endpoint:', err.message);
       }
-    } catch (error) {
-      console.error('Error fetching transaction signatures:', {
-        message: error.message,
-        response: error.response?.data
-      });
     }
-    
-    console.log('\n=== Wallet Data Fetch Complete ===');
-    console.log('Final wallet data structure:', {
-      hasNativeBalance: !!walletData.nativeBalance,
-      tokenAccountsCount: walletData.tokenAccounts?.length || 0,
-      signaturesCount: walletData.signatures?.length || 0,
-      transactionsCount: walletData.transactions?.length || 0
-    });
     
     return walletData;
   } catch (error) {
-    console.error('Error in fetchWalletData:', {
-      message: error.message,
-      response: error.response?.data,
-      stack: error.stack
-    });
+    console.error('Error fetching wallet data:', error.message);
     return { error: error.message };
   }
 }
@@ -523,7 +500,77 @@ function calculateWalletStats(walletData, solPrice = 100) {
     const signatures = walletData.signatures || [];
     const transactions = walletData.transactions || [];
     const tokenAccounts = walletData.tokenAccounts || [];
+    const balanceHistory = walletData.balanceHistory || [];
     
+    // Calculate time-based PnL metrics
+    const now = new Date();
+    const timeRanges = {
+      '24h': 24 * 60 * 60 * 1000,
+      '7d': 7 * 24 * 60 * 60 * 1000,
+      '1mo': 30 * 24 * 60 * 60 * 1000,
+      '3mo': 90 * 24 * 60 * 60 * 1000
+    };
+    
+    const pnlMetrics = {};
+    
+    // Calculate PnL for each time range
+    Object.entries(timeRanges).forEach(([range, ms]) => {
+      const cutoffDate = new Date(now.getTime() - ms);
+      const relevantBalances = balanceHistory.filter(point => 
+        new Date(point.timestamp) >= cutoffDate
+      );
+      
+      if (relevantBalances.length > 0) {
+        const startBalance = relevantBalances[0].balance;
+        const endBalance = nativeBalance; // Current balance
+        const pnlPercent = ((endBalance - startBalance) / startBalance) * 100;
+        
+        pnlMetrics[range] = {
+          startBalance,
+          endBalance,
+          pnlPercent: pnlPercent.toFixed(2),
+          startDate: relevantBalances[0].timestamp,
+          endDate: now.toISOString()
+        };
+      }
+    });
+    
+    // Calculate all-time PnL if we have historical data
+    if (balanceHistory.length > 0) {
+      const firstBalance = balanceHistory[0].balance;
+      const pnlPercent = ((nativeBalance - firstBalance) / firstBalance) * 100;
+      
+      pnlMetrics.allTime = {
+        startBalance: firstBalance,
+        endBalance: nativeBalance,
+        pnlPercent: pnlPercent.toFixed(2),
+        startDate: balanceHistory[0].timestamp,
+        endDate: now.toISOString()
+      };
+    }
+    
+    // Group balance history by time periods for charting
+    const timeGroups = {};
+    Object.entries(timeRanges).forEach(([range, ms]) => {
+      const cutoffDate = new Date(now.getTime() - ms);
+      const relevantPoints = balanceHistory
+        .filter(point => new Date(point.timestamp) >= cutoffDate)
+        .map(point => ({
+          timestamp: point.timestamp,
+          balance: point.balance,
+          pnlPercent: ((point.balance - balanceHistory[0].balance) / balanceHistory[0].balance) * 100
+        }));
+      
+      timeGroups[range] = relevantPoints;
+    });
+    
+    // All-time balance history
+    timeGroups.allTime = balanceHistory.map(point => ({
+      timestamp: point.timestamp,
+      balance: point.balance,
+      pnlPercent: ((point.balance - balanceHistory[0].balance) / balanceHistory[0].balance) * 100
+    }));
+
     // Calculate transaction metrics
     let totalTrades = signatures.length;
     let failedTxCount = 0;
@@ -735,12 +782,13 @@ function calculateWalletStats(walletData, solPrice = 100) {
       avgGasPerTx: avgGasPerTx.toFixed(6),
       walletValue: portfolioValueFormatted,
       tokens,
-      txHistory,
+      pnlMetrics,
+      balanceHistory: timeGroups,
       swapCount,
       transfersCount,
       mintCount,
       achievements,
-      recentTransactions // Add this to ensure we include recent transactions
+      recentTransactions, // Add this to ensure we include recent transactions
     };
   } catch (error) {
     console.error('Error calculating wallet stats:', error);

@@ -39,35 +39,6 @@ const WalletSchema = new mongoose.Schema({
     type: String,
     default: ''
   },
-  txHistory: {
-    type: [{
-      day: Number,
-      date: String,
-      value: Number,
-      transactions: Number,
-      solAmt: {
-        type: Number,
-        default: 0
-      },
-      inTxs: {
-        type: Number,
-        default: 0
-      },
-      outTxs: {
-        type: Number,
-        default: 0
-      },
-      inSol: {
-        type: Number,
-        default: 0
-      },
-      outSol: {
-        type: Number,
-        default: 0
-      }
-    }],
-    default: []
-  },
   createdAt: {
     type: Date,
     default: Date.now

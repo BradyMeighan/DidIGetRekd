@@ -139,17 +139,7 @@ router.get('/stats', async (req, res) => {
 router.post('/:address/leaderboard', async (req, res) => {
   try {
     const { address } = req.params;
-    const { 
-      score, 
-      totalTrades, 
-      gasSpent, 
-      pnl, 
-      walletValue, 
-      nativeBalance, 
-      lastRoast, 
-      solPrice,
-      txHistory  // Add txHistory to the destructuring
-    } = req.body;
+    const { score, totalTrades, gasSpent, pnl, walletValue, nativeBalance, lastRoast, solPrice } = req.body;
     
     if (!address) {
       return res.status(400).json({ error: 'Wallet address is required' });
@@ -171,12 +161,6 @@ router.post('/:address/leaderboard', async (req, res) => {
     // Add lastRoast to roasts array if provided
     if (lastRoast) {
       updateData.lastRoast = lastRoast;
-    }
-    
-    // Add txHistory if provided
-    if (txHistory && Array.isArray(txHistory) && txHistory.length > 0) {
-      console.log(`Storing ${txHistory.length} tx history points for wallet ${address}`);
-      updateData.txHistory = txHistory;
     }
     
     const result = await Wallet.findOneAndUpdate(
@@ -202,7 +186,6 @@ router.post('/:address/leaderboard', async (req, res) => {
         nativeBalance: result.nativeBalance,
         solPrice: result.solPrice,
         lastRoast: result.lastRoast,
-        txHistory: result.txHistory,  // Include txHistory in the response
         createdAt: result.createdAt,
         lastSeen: result.lastSeen
       }
@@ -210,95 +193,6 @@ router.post('/:address/leaderboard', async (req, res) => {
   } catch (error) {
     console.error('Error saving to leaderboard:', error);
     return res.status(500).json({ error: 'Server error' });
-  }
-});
-
-/**
- * @route POST /api/leaderboard/submit
- * @desc Submit wallet data to leaderboard
- */
-router.post('/submit', async (req, res) => {
-  try {
-    const { address, balance, transactions, txHistory } = req.body;
-    
-    if (!address || !balance) {
-      return res.status(400).json({
-        success: false,
-        message: 'Address and balance are required'
-      });
-    }
-    
-    // Validate txHistory if provided
-    if (txHistory && Array.isArray(txHistory)) {
-      // Ensure each entry has required fields
-      for (const entry of txHistory) {
-        if (!entry.day || !entry.date || entry.value === undefined) {
-          return res.status(400).json({
-            success: false,
-            message: 'Each txHistory entry must include day, date, and value fields'
-          });
-        }
-      }
-    }
-    
-    // Check if wallet already exists
-    let wallet = await Wallet.findOne({ address });
-    
-    if (wallet) {
-      // Update existing wallet
-      wallet.balance = balance;
-      
-      // Only update transactions if provided
-      if (transactions && Array.isArray(transactions)) {
-        wallet.transactions = transactions;
-      }
-      
-      // Only update txHistory if provided and valid
-      if (txHistory && Array.isArray(txHistory)) {
-        // Verify the structure of the txHistory entries
-        const cleanedTxHistory = txHistory.map(entry => {
-          // Create a normalized entry that includes all expected fields
-          return {
-            day: entry.day,
-            date: entry.date,
-            value: parseFloat(entry.value) || 0,
-            transactions: entry.transactions || 0,
-            solAmt: entry.solAmt || 0,
-            inTxs: entry.inTxs || 0,
-            outTxs: entry.outTxs || 0,
-            inSol: entry.inSol || 0,
-            outSol: entry.outSol || 0
-          };
-        });
-        
-        wallet.txHistory = cleanedTxHistory;
-      }
-      
-      await wallet.save();
-    } else {
-      // Create new wallet
-      const newWallet = new Wallet({
-        address,
-        balance,
-        transactions: transactions || [],
-        txHistory: txHistory || []
-      });
-      
-      await newWallet.save();
-      wallet = newWallet;
-    }
-    
-    // Return success with updated wallet data
-    return res.json({
-      success: true,
-      wallet
-    });
-  } catch (error) {
-    console.error('Error submitting to leaderboard:', error);
-    return res.status(500).json({
-      success: false,
-      message: 'Server error saving leaderboard data'
-    });
   }
 });
 
