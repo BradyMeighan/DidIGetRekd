@@ -13,13 +13,15 @@ router.get('/test', (req, res) => {
   try {
     const heliusKey = process.env.HELIUS_API_KEY ? 'Set' : 'Missing';
     const openaiKey = process.env.OPENAI_API_KEY ? 'Set' : 'Missing';
+    const flipsideKey = process.env.FLIPSIDE_API_KEY ? 'Set' : 'Missing';
     
     res.json({
       status: 'OK',
       message: 'Wallet API is working',
       config: {
         heliusApiKey: heliusKey,
-        openaiApiKey: openaiKey
+        openaiApiKey: openaiKey,
+        flipsideApiKey: flipsideKey
       }
     });
   } catch (error) {
@@ -660,6 +662,91 @@ router.get('/token/:mintAddress', async (req, res) => {
     console.error('Error getting token info:', error.message);
     res.status(500).json({
       error: 'Error getting token info',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route GET /api/wallet/flipside/test/:address
+ * @desc Test endpoint for Flipside API integration
+ */
+router.get('/flipside/test/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    
+    if (!address) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+    
+    console.log(`Testing Flipside API integration for wallet: ${address}`);
+    
+    // Check if Flipside API key is configured
+    if (!process.env.FLIPSIDE_API_KEY) {
+      return res.status(400).json({ 
+        error: 'Flipside API key not configured',
+        message: 'FLIPSIDE_API_KEY not found in environment variables'
+      });
+    }
+    
+    // Test all Flipside functions
+    const startTime = Date.now();
+    
+    const results = {
+      address,
+      currentBalance: null,
+      historicalBalances: null,
+      transactions: null,
+      executionTime: null,
+      errors: []
+    };
+    
+    try {
+      results.currentBalance = await walletService.getWalletCurrentBalance(address);
+    } catch (error) {
+      console.error('Error testing current balance:', error);
+      results.errors.push({
+        step: 'currentBalance',
+        message: error.message
+      });
+    }
+    
+    try {
+      const balanceHistory = await walletService.getWalletHistoricalBalances(address);
+      results.historicalBalances = {
+        count: balanceHistory.length,
+        sample: balanceHistory.slice(0, 3)
+      };
+    } catch (error) {
+      console.error('Error testing historical balances:', error);
+      results.errors.push({
+        step: 'historicalBalances',
+        message: error.message
+      });
+    }
+    
+    try {
+      const transactions = await walletService.getWalletTransactions(address, 10);
+      results.transactions = {
+        count: transactions.length,
+        sample: transactions.slice(0, 3)
+      };
+    } catch (error) {
+      console.error('Error testing transactions:', error);
+      results.errors.push({
+        step: 'transactions',
+        message: error.message
+      });
+    }
+    
+    results.executionTime = Date.now() - startTime;
+    results.success = results.errors.length === 0;
+    
+    res.json(results);
+  } catch (error) {
+    console.error('Error testing Flipside API integration:', error);
+    res.status(500).json({ 
+      error: 'Test failed',
       message: error.message
     });
   }
