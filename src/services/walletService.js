@@ -16,6 +16,38 @@ const solPriceCache = {
   timestamp: null
 };
 
+// Add these constants at the top of the file
+const HELIUS_RATE_LIMIT = 50; // requests per second
+const MAX_RETRIES = 3;
+const INITIAL_RETRY_DELAY = 1000; // 1 second
+
+/**
+ * Helper function to add delay between API calls
+ * @param {number} ms - Milliseconds to wait
+ * @returns {Promise} Promise that resolves after delay
+ */
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+/**
+ * Helper function to make API calls with retry logic
+ * @param {Function} apiCall - Function that returns a promise
+ * @param {number} retries - Number of retries remaining
+ * @param {number} delay - Current delay between retries
+ * @returns {Promise} Result of API call
+ */
+async function makeApiCallWithRetry(apiCall, retries = MAX_RETRIES, delay = INITIAL_RETRY_DELAY) {
+  try {
+    return await apiCall();
+  } catch (error) {
+    if (error.response?.status === 429 && retries > 0) {
+      console.log(`Rate limited, retrying in ${delay}ms... (${retries} retries left)`);
+      await sleep(delay);
+      return makeApiCallWithRetry(apiCall, retries - 1, delay * 2);
+    }
+    throw error;
+  }
+}
+
 /**
  * Fetch the current SOL price from CoinGecko
  * @returns {Promise<number>} - Current SOL price
@@ -361,68 +393,63 @@ async function fetchWalletData(address) {
       
       walletData.transactions = [];
       
-      for (const sigData of transactionsToFetch) {
-        try {
-          const txResponse = await axios.post(rpcUrl, {
-            jsonrpc: "2.0",
-            id: 4,
-            method: "getTransaction",
-            params: [
-              sigData.signature,
-              { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
-            ]
-          });
-          
-          if (txResponse.data?.result) {
-            const tx = txResponse.data.result;
+      // Process transactions in batches to avoid rate limits
+      const BATCH_SIZE = 10;
+      for (let i = 0; i < transactionsToFetch.length; i += BATCH_SIZE) {
+        const batch = transactionsToFetch.slice(i, i + BATCH_SIZE);
+        console.log(`Processing batch ${i/BATCH_SIZE + 1} of ${Math.ceil(transactionsToFetch.length/BATCH_SIZE)}`);
+        
+        // Process each transaction in the batch
+        const batchPromises = batch.map(sigData => 
+          makeApiCallWithRetry(async () => {
+            const txResponse = await axios.post(rpcUrl, {
+              jsonrpc: "2.0",
+              id: 4,
+              method: "getTransaction",
+              params: [
+                sigData.signature,
+                { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }
+              ]
+            });
             
-            // Add metadata and balance info
-            tx.blockTime = tx.blockTime || sigData.blockTime;
-            tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
-            tx.successful = sigData.err === null;
-            tx.fee = tx.meta?.fee || 0;
-            tx.signature = sigData.signature;
-            
-            // Extract postBalance in SOL
-            if (tx.meta?.postBalances && tx.meta.postBalances.length > 0) {
-              const accountIndex = tx.transaction.message.accountKeys.findIndex(key => key === address);
-              if (accountIndex !== -1 && tx.meta.postBalances[accountIndex]) {
-                tx.postBalance = tx.meta.postBalances[accountIndex] / 1000000000; // Convert lamports to SOL
-                
-                // Add to balance history
-                walletData.balanceHistory.push({
-                  timestamp: tx.timestamp,
-                  balance: tx.postBalance,
-                  signature: tx.signature
-                });
-              }
-            }
-            
-            // Extract transaction type and description
-            if (tx.transaction?.message?.instructions) {
-              const instructions = tx.transaction.message.instructions;
-              let description = "";
+            if (txResponse.data?.result) {
+              const tx = txResponse.data.result;
               
-              for (const instruction of instructions) {
-                if (instruction.program === 'system' && instruction.parsed?.type === 'transfer') {
-                  const amount = instruction.parsed.info.lamports / 1000000000;
-                  const source = instruction.parsed.info.source;
-                  const destination = instruction.parsed.info.destination;
-                  const isReceiving = destination === address;
+              // Add metadata and balance info
+              tx.blockTime = tx.blockTime || sigData.blockTime;
+              tx.timestamp = tx.blockTime ? new Date(tx.blockTime * 1000).toISOString() : null;
+              tx.successful = sigData.err === null;
+              tx.fee = tx.meta?.fee || 0;
+              tx.signature = sigData.signature;
+              
+              // Extract postBalance in SOL
+              if (tx.meta?.postBalances && tx.meta.postBalances.length > 0) {
+                const accountIndex = tx.transaction.message.accountKeys.findIndex(key => key === address);
+                if (accountIndex !== -1 && tx.meta.postBalances[accountIndex]) {
+                  tx.postBalance = tx.meta.postBalances[accountIndex] / 1000000000; // Convert lamports to SOL
                   
-                  description = isReceiving 
-                    ? `Received ${amount.toFixed(6)} SOL from ${source.slice(0, 4)}...`
-                    : `Sent ${amount.toFixed(6)} SOL to ${destination.slice(0, 4)}...`;
+                  // Add to balance history
+                  walletData.balanceHistory.push({
+                    timestamp: tx.timestamp,
+                    balance: tx.postBalance,
+                    signature: tx.signature
+                  });
                 }
               }
               
-              tx.description = description || (tx.meta?.innerInstructions?.length > 0 ? "Complex Transaction" : "SOL Transfer");
+              return tx;
             }
-            
-            walletData.transactions.push(tx);
-          }
-        } catch (err) {
-          console.error(`Error fetching transaction ${sigData.signature}:`, err.message);
+            return null;
+          })
+        );
+        
+        // Wait for all transactions in the batch to complete
+        const batchResults = await Promise.all(batchPromises);
+        walletData.transactions.push(...batchResults.filter(tx => tx !== null));
+        
+        // Add delay between batches to avoid rate limits
+        if (i + BATCH_SIZE < transactionsToFetch.length) {
+          await sleep(1000); // 1 second delay between batches
         }
       }
       
