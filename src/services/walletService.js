@@ -2238,6 +2238,144 @@ async function getWalletBalanceChartData(address, timeRange = 'all') {
   }
 }
 
+/**
+ * Fetch token accounts for a wallet
+ * @param {string} address - Wallet address
+ * @returns {Promise<Array>} Array of token accounts
+ */
+async function fetchWalletTokens(address) {
+  try {
+    console.log(`Fetching token accounts for wallet ${address}`);
+    
+    // Check if Helius API key is available
+    if (!process.env.HELIUS_API_KEY) {
+      console.log('No HELIUS_API_KEY found in environment, returning empty token list');
+      return [];
+    }
+    
+    const apiKey = process.env.HELIUS_API_KEY;
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+    
+    const tokenResponse = await makeApiCallWithRetry(async () => 
+      axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 2,
+        method: "getTokenAccountsByOwner",
+        params: [
+          address,
+          { programId: "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA" },
+          { encoding: "jsonParsed" }
+        ]
+      })
+    );
+    
+    if (tokenResponse.data?.result?.value) {
+      const tokenAccounts = tokenResponse.data.result.value;
+      console.log(`Found ${tokenAccounts.length} token accounts`);
+      return tokenAccounts;
+    } else {
+      console.log('No token accounts found or error in response');
+      return [];
+    }
+  } catch (error) {
+    console.error('Error fetching token accounts:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch transactions for a wallet (wrapper around getWalletTransactions)
+ * @param {string} address - Wallet address
+ * @param {number} limit - Maximum number of transactions to return
+ * @returns {Promise<Array>} Array of transaction data
+ */
+async function fetchWalletTransactions(address, limit = 50) {
+  return getWalletTransactions(address, limit);
+}
+
+/**
+ * Fetch details for a specific transaction
+ * @param {string} signature - Transaction signature
+ * @returns {Promise<Object>} Transaction details
+ */
+async function fetchTransactionDetails(signature) {
+  try {
+    console.log(`Fetching details for transaction: ${signature}`);
+    
+    // Check if Helius API key is available
+    if (!process.env.HELIUS_API_KEY) {
+      console.error('No HELIUS_API_KEY found in environment');
+      return { error: 'API_KEY_MISSING', message: 'Helius API key is not configured' };
+    }
+    
+    const apiKey = process.env.HELIUS_API_KEY;
+    const rpcUrl = `https://mainnet.helius-rpc.com/?api-key=${apiKey}`;
+    
+    const txDetailResponse = await makeApiCallWithRetry(async () => 
+      axios.post(rpcUrl, {
+        jsonrpc: "2.0",
+        id: 4,
+        method: "getTransaction",
+        params: [signature, { encoding: "jsonParsed", maxSupportedTransactionVersion: 0 }]
+      })
+    );
+    
+    if (txDetailResponse.data?.result) {
+      return txDetailResponse.data.result;
+    } else {
+      console.log('No transaction details found or error in response');
+      return { error: 'NOT_FOUND', message: 'Transaction details not found' };
+    }
+  } catch (error) {
+    console.error('Error fetching transaction details:', error.message);
+    return { error: error.message };
+  }
+}
+
+/**
+ * Get liquidity providing transactions for a wallet
+ * @param {string} address - Wallet address
+ * @returns {Promise<Array>} Array of liquidity providing transactions
+ */
+async function getLiquidityProvidingTransactions(address) {
+  try {
+    console.log(`Finding liquidity providing transactions for wallet ${address}`);
+    
+    // This is a placeholder - in a real implementation we would
+    // query specific programs like Raydium, Orca, etc.
+    return [];
+  } catch (error) {
+    console.error('Error finding liquidity providing transactions:', error.message);
+    return [];
+  }
+}
+
+/**
+ * Fetch SOL price (wrapper around fetchSolPrice)
+ * @returns {Promise<number>} Current SOL price
+ */
+async function fetchSOLPrice() {
+  return fetchSolPrice();
+}
+
+/**
+ * Get a wallet score (wrapper around calculateScore)
+ * @param {Object} stats - Wallet statistics
+ * @returns {number} Wallet score
+ */
+function getWalletScore(stats) {
+  return calculateScore(stats);
+}
+
+/**
+ * Generate wallet achievements (wrapper around generateAchievements)
+ * @param {Object} walletData - Wallet data
+ * @returns {Array} List of achievements
+ */
+function generateWalletAchievements(walletData) {
+  return generateAchievements(walletData);
+}
+
 // Export functions
 module.exports = {
   runFlipsideQuery,
