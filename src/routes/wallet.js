@@ -28,6 +28,74 @@ router.get('/test', (req, res) => {
 });
 
 /**
+ * POST /api/wallet/chart
+ * Generate a chart from transaction data using Node.js Canvas
+ * IMPORTANT: This route must be defined BEFORE the /:address routes
+ */
+router.post('/chart', async (req, res) => {
+  try {
+    const { data, darkMode } = req.body;
+    
+    console.log('Chart request received:', { 
+      dataLength: data?.length || 0, 
+      darkMode,
+      sampleData: data?.slice(0, 2) 
+    });
+    
+    if (!data || !Array.isArray(data)) {
+      console.error('Invalid chart data format:', data);
+      return res.status(400).json({ error: 'Invalid chart data', success: false });
+    }
+    
+    // Clean the data to ensure it has correct format
+    const cleanData = data.map(point => {
+      const value = parseFloat(point.value || 0) || 0;
+      const label = String(point.label || '');
+      
+      console.log('Processing data point:', { 
+        originalValue: point.value, 
+        parsedValue: value,
+        originalLabel: point.label,
+        cleanLabel: label
+      });
+      
+      return { value, label };
+    });
+    
+    // Generate chart using our JavaScript chart generator
+    console.log(`Generating chart with ${cleanData.length} data points:`, cleanData);
+    
+    try {
+      const imageData = generateChart(cleanData, Boolean(darkMode));
+      console.log('Chart generated successfully, image data length:', imageData?.length || 0);
+      
+      // Return the base64 encoded image with explicit success flag
+      const response = {
+        success: true,
+        imageData
+      };
+      
+      console.log('Sending response with success:', response.success);
+      return res.json(response);
+    } catch (chartError) {
+      console.error('Error in chart generation:', chartError);
+      return res.status(500).json({ 
+        error: 'Chart generation failed', 
+        details: chartError.message,
+        success: false 
+      });
+    }
+  } catch (error) {
+    console.error('Error in chart endpoint:', error);
+    return res.status(500).json({ 
+      error: 'Failed to generate chart', 
+      details: error.message,
+      success: false
+    });
+  }
+});
+
+/**
  * @route GET /api/wallet/:address
  * @desc Get wallet statistics and generate roast
  */
@@ -592,73 +660,6 @@ router.get('/token/:mintAddress', async (req, res) => {
     res.status(500).json({
       error: 'Error getting token info',
       message: error.message
-    });
-  }
-});
-
-/**
- * POST /api/wallet/chart
- * Generate a chart from transaction data using Node.js Canvas
- */
-router.post('/chart', async (req, res) => {
-  try {
-    const { data, darkMode } = req.body;
-    
-    console.log('Chart request received:', { 
-      dataLength: data?.length || 0, 
-      darkMode,
-      sampleData: data?.slice(0, 2) 
-    });
-    
-    if (!data || !Array.isArray(data)) {
-      console.error('Invalid chart data format:', data);
-      return res.status(400).json({ error: 'Invalid chart data', success: false });
-    }
-    
-    // Clean the data to ensure it has correct format
-    const cleanData = data.map(point => {
-      const value = parseFloat(point.value || 0) || 0;
-      const label = String(point.label || '');
-      
-      console.log('Processing data point:', { 
-        originalValue: point.value, 
-        parsedValue: value,
-        originalLabel: point.label,
-        cleanLabel: label
-      });
-      
-      return { value, label };
-    });
-    
-    // Generate chart using our JavaScript chart generator
-    console.log(`Generating chart with ${cleanData.length} data points:`, cleanData);
-    
-    try {
-      const imageData = generateChart(cleanData, Boolean(darkMode));
-      console.log('Chart generated successfully, image data length:', imageData?.length || 0);
-      
-      // Return the base64 encoded image with explicit success flag
-      const response = {
-        success: true,
-        imageData
-      };
-      
-      console.log('Sending response with success:', response.success);
-      return res.json(response);
-    } catch (chartError) {
-      console.error('Error in chart generation:', chartError);
-      return res.status(500).json({ 
-        error: 'Chart generation failed', 
-        details: chartError.message,
-        success: false 
-      });
-    }
-  } catch (error) {
-    console.error('Error in chart endpoint:', error);
-    return res.status(500).json({ 
-      error: 'Failed to generate chart', 
-      details: error.message,
-      success: false
     });
   }
 });
