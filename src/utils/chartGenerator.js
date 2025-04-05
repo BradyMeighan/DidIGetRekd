@@ -9,18 +9,80 @@ const { createCanvas } = require('canvas');
  */
 function generateChart(data, darkMode = false) {
   try {
-    if (!data || !Array.isArray(data) || data.length === 0) {
-      throw new Error('Invalid data format');
-    }
-
-    // Extract values and dates
-    const values = data.map(point => typeof point.value === 'number' ? point.value : parseFloat(point.value || 0));
-    const labels = data.map(point => String(point.label || ''));
+    console.log('Starting chart generation with data:', JSON.stringify(data));
     
-    // Calculate data range
+    // Input validation with detailed error messages
+    if (!data) {
+      throw new Error('Data parameter is null or undefined');
+    }
+    
+    if (!Array.isArray(data)) {
+      throw new Error(`Data is not an array: ${typeof data}`);
+    }
+    
+    if (data.length === 0) {
+      throw new Error('Data array is empty');
+    }
+    
+    // Validate data points format
+    data.forEach((point, index) => {
+      if (!point) {
+        throw new Error(`Data point at index ${index} is null or undefined`);
+      }
+      
+      if (typeof point !== 'object') {
+        throw new Error(`Data point at index ${index} is not an object: ${typeof point}`);
+      }
+      
+      // Check for value field
+      if (point.value === undefined || point.value === null) {
+        throw new Error(`Missing value in data point at index ${index}: ${JSON.stringify(point)}`);
+      }
+      
+      // Check if value can be parsed as a number
+      const parsedValue = parseFloat(point.value);
+      if (isNaN(parsedValue)) {
+        throw new Error(`Cannot parse value as number in data point at index ${index}: ${point.value}`);
+      }
+      
+      // Check for label field
+      if (!point.label && point.label !== '') {
+        throw new Error(`Missing label in data point at index ${index}: ${JSON.stringify(point)}`);
+      }
+    });
+
+    // Extract values and dates with explicit conversion and additional checks
+    const values = [];
+    const labels = [];
+    
+    for (let i = 0; i < data.length; i++) {
+      const point = data[i];
+      let value;
+      
+      // Handle different value formats with explicit parsing
+      if (typeof point.value === 'number') {
+        value = point.value;
+      } else {
+        // Handle string values, ensuring we can parse them
+        value = parseFloat(String(point.value).replace(/[^\d.-]/g, ''));
+      }
+      
+      if (isNaN(value)) {
+        console.warn(`Invalid value at index ${i}, using 0:`, point.value);
+        value = 0;
+      }
+      
+      values.push(value);
+      labels.push(String(point.label || ''));
+    }
+    
+    console.log('Processed values:', values);
+    console.log('Processed labels:', labels);
+    
+    // Calculate data range with safety checks
     const minValue = Math.max(0, Math.min(...values) * 0.9);
-    const maxValue = Math.max(...values) * 1.1;
-    const valueRange = maxValue - minValue;
+    const maxValue = Math.max(...values) * 1.1 || 1; // Fallback to 1 if max is 0
+    const valueRange = maxValue - minValue || 1; // Avoid division by zero
     
     // Determine colors based on mode and trend
     const trendIsUp = values[values.length - 1] >= values[0];
@@ -89,95 +151,154 @@ function generateChart(data, darkMode = false) {
       ctx.fillText(value.toFixed(2), padding.left - 10, y + 4);
     }
     
-    // Draw chart points
-    const points = values.map((value, index) => {
-      const x = padding.left + (index / (values.length - 1)) * chartWidth;
-      const y = padding.top + chartHeight - ((value - minValue) / valueRange) * chartHeight;
-      return { x, y };
-    });
-    
-    // Draw area under the line
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, padding.top + chartHeight); // Start at bottom left
-    
-    // Draw up to first point
-    ctx.lineTo(points[0].x, points[0].y);
-    
-    // Draw line through all points
-    for (let i = 1; i < points.length; i++) {
-      // Use bezier curve for smoother lines
-      const prevPoint = points[i - 1];
-      const currentPoint = points[i];
+    // Draw chart points with checks for sufficient data
+    if (values.length < 2) {
+      // Handle case with insufficient data points
+      console.warn('Not enough data points for a line chart, generating simplified version');
       
-      // Control points for curve
-      const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
-      const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
+      // Create at least two points for a minimal chart
+      const x1 = padding.left;
+      const x2 = width - padding.right;
+      const y = padding.top + chartHeight / 2; // Center point
       
-      ctx.bezierCurveTo(
-        cp1x, prevPoint.y,
-        cp2x, currentPoint.y,
-        currentPoint.x, currentPoint.y
-      );
-    }
-    
-    // Close the path down to the x-axis
-    ctx.lineTo(points[points.length - 1].x, padding.top + chartHeight);
-    ctx.closePath();
-    
-    // Fill the area
-    ctx.fillStyle = colors.area;
-    ctx.fill();
-    
-    // Draw the line again over the area
-    ctx.beginPath();
-    ctx.moveTo(points[0].x, points[0].y);
-    
-    for (let i = 1; i < points.length; i++) {
-      const prevPoint = points[i - 1];
-      const currentPoint = points[i];
-      
-      // Control points for curve
-      const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
-      const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
-      
-      ctx.bezierCurveTo(
-        cp1x, prevPoint.y,
-        cp2x, currentPoint.y,
-        currentPoint.x, currentPoint.y
-      );
-    }
-    
-    ctx.strokeStyle = colors.line;
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    
-    // Draw data points
-    points.forEach((point) => {
+      // Draw a simple horizontal line
       ctx.beginPath();
-      ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
-      ctx.fillStyle = '#ffffff';
-      ctx.fill();
+      ctx.moveTo(x1, y);
+      ctx.lineTo(x2, y);
       ctx.strokeStyle = colors.line;
       ctx.lineWidth = 2;
       ctx.stroke();
-    });
-    
-    // Draw x-axis labels
-    ctx.fillStyle = colors.text;
-    ctx.font = '12px Arial';
-    ctx.textAlign = 'center';
-    
-    labels.forEach((label, index) => {
-      const x = padding.left + (index / (labels.length - 1)) * chartWidth;
-      ctx.fillText(label, x, height - padding.bottom / 2);
-    });
+      
+      // Add a label explaining the issue
+      ctx.fillStyle = colors.text;
+      ctx.font = '14px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Insufficient data for detailed chart', width / 2, height / 2 - 40);
+    } else {
+      // Normal chart with multiple points
+      const points = values.map((value, index) => {
+        const x = padding.left + (index / (values.length - 1)) * chartWidth;
+        const y = padding.top + chartHeight - ((value - minValue) / valueRange) * chartHeight;
+        return { x, y };
+      });
+      
+      // Draw area under the line
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, padding.top + chartHeight); // Start at bottom left
+      
+      // Draw up to first point
+      ctx.lineTo(points[0].x, points[0].y);
+      
+      // Draw line through all points
+      for (let i = 1; i < points.length; i++) {
+        // Use bezier curve for smoother lines
+        const prevPoint = points[i - 1];
+        const currentPoint = points[i];
+        
+        // Control points for curve
+        const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
+        const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
+        
+        ctx.bezierCurveTo(
+          cp1x, prevPoint.y,
+          cp2x, currentPoint.y,
+          currentPoint.x, currentPoint.y
+        );
+      }
+      
+      // Close the path down to the x-axis
+      ctx.lineTo(points[points.length - 1].x, padding.top + chartHeight);
+      ctx.closePath();
+      
+      // Fill the area
+      ctx.fillStyle = colors.area;
+      ctx.fill();
+      
+      // Draw the line again over the area
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      
+      for (let i = 1; i < points.length; i++) {
+        const prevPoint = points[i - 1];
+        const currentPoint = points[i];
+        
+        // Control points for curve
+        const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
+        const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
+        
+        ctx.bezierCurveTo(
+          cp1x, prevPoint.y,
+          cp2x, currentPoint.y,
+          currentPoint.x, currentPoint.y
+        );
+      }
+      
+      ctx.strokeStyle = colors.line;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+      
+      // Draw data points
+      points.forEach((point) => {
+        ctx.beginPath();
+        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = '#ffffff';
+        ctx.fill();
+        ctx.strokeStyle = colors.line;
+        ctx.lineWidth = 2;
+        ctx.stroke();
+      });
+      
+      // Draw x-axis labels
+      ctx.fillStyle = colors.text;
+      ctx.font = '12px Arial';
+      ctx.textAlign = 'center';
+      
+      labels.forEach((label, index) => {
+        const x = padding.left + (index / (labels.length - 1)) * chartWidth;
+        ctx.fillText(label, x, height - padding.bottom / 2);
+      });
+    }
     
     // Convert canvas to base64
+    console.log('Converting canvas to base64');
     const imageBase64 = canvas.toDataURL('image/png').split(',')[1];
+    console.log('Successfully generated chart image, length:', imageBase64.length);
     return imageBase64;
   } catch (error) {
     console.error('Error generating chart:', error);
-    throw error;
+    
+    // Generate a simple error chart showing what went wrong
+    try {
+      const width = 800;
+      const height = 400;
+      const canvas = createCanvas(width, height);
+      const ctx = canvas.getContext('2d');
+      
+      // Fill background
+      ctx.fillStyle = darkMode ? '#111827' : '#ffffff';
+      ctx.fillRect(0, 0, width, height);
+      
+      // Draw error message
+      ctx.fillStyle = darkMode ? '#ffffff' : '#333333';
+      ctx.font = 'bold 16px Arial';
+      ctx.textAlign = 'center';
+      ctx.fillText('Error Generating Chart', width / 2, 50);
+      
+      // Draw detailed error message
+      ctx.font = '14px Arial';
+      ctx.fillText(error.message, width / 2, 100);
+      
+      // Draw hint for troubleshooting
+      ctx.font = '12px Arial';
+      ctx.fillText('Check the server logs for more details', width / 2, 140);
+      
+      // Convert canvas to base64
+      const errorImage = canvas.toDataURL('image/png').split(',')[1];
+      return errorImage;
+    } catch (fallbackError) {
+      console.error('Error creating fallback error chart:', fallbackError);
+      throw error; // Throw the original error
+    }
   }
 }
 
