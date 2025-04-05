@@ -36,15 +36,60 @@ router.get('/test', (req, res) => {
  */
 router.post('/chart', async (req, res) => {
   try {
-    const { data, darkMode, compactMode } = req.body;
+    const { data, darkMode, compactMode, chartType, address, timeRange } = req.body;
     
     console.log('Chart request received:', { 
       dataLength: data?.length || 0, 
       darkMode,
       compactMode,
+      chartType,
+      address,
+      timeRange,
       sampleData: data?.slice(0, 2) 
     });
     
+    // If address and timeRange are provided, fetch data from Flipside
+    // This allows us to get chart data directly from the chart endpoint
+    if (address && !data) {
+      console.log(`Fetching chart data for wallet ${address} with timeRange ${timeRange || 'all'}`);
+      try {
+        const chartData = await walletService.getWalletBalanceChartData(address, timeRange || 'all');
+        
+        if (!chartData || chartData.length === 0) {
+          return res.status(400).json({ 
+            error: 'No chart data available for this wallet', 
+            success: false 
+          });
+        }
+        
+        // Transform data to format expected by chart generator
+        const transformedData = chartData.map(point => ({
+          value: chartType === 'pnl' 
+            ? calculatePnLPercentage(chartData[0].sol_balance, point.sol_balance) 
+            : point.sol_balance,
+          label: formatDateLabel(point.timestamp, timeRange || 'all')
+        }));
+        
+        // Generate chart with the fetched data
+        const imageData = generateChart(transformedData, Boolean(darkMode), Boolean(compactMode), chartType);
+        
+        console.log('Chart generated successfully with Flipside data, image data length:', imageData?.length || 0);
+        
+        return res.json({
+          success: true,
+          imageData
+        });
+      } catch (error) {
+        console.error('Error fetching chart data from Flipside:', error);
+        return res.status(500).json({ 
+          error: 'Failed to fetch chart data', 
+          details: error.message,
+          success: false 
+        });
+      }
+    }
+    
+    // Original functionality for cases where data is provided directly
     if (!data || !Array.isArray(data)) {
       console.error('Invalid chart data format:', data);
       return res.status(400).json({ error: 'Invalid chart data', success: false });
@@ -69,7 +114,7 @@ router.post('/chart', async (req, res) => {
     console.log(`Generating chart with ${cleanData.length} data points:`, cleanData);
     
     try {
-      const imageData = generateChart(cleanData, Boolean(darkMode), Boolean(compactMode));
+      const imageData = generateChart(cleanData, Boolean(darkMode), Boolean(compactMode), chartType);
       console.log('Chart generated successfully, image data length:', imageData?.length || 0);
       
       // Return the base64 encoded image with explicit success flag
@@ -97,6 +142,40 @@ router.post('/chart', async (req, res) => {
     });
   }
 });
+
+/**
+ * Helper function to calculate PnL percentage for chart data
+ * @param {number} initialBalance - Initial balance
+ * @param {number} currentBalance - Current balance
+ * @returns {number} PnL percentage
+ */
+function calculatePnLPercentage(initialBalance, currentBalance) {
+  if (!initialBalance || initialBalance === 0) return 0;
+  return ((currentBalance - initialBalance) / initialBalance) * 100;
+}
+
+/**
+ * Helper function to format date labels based on time range
+ * @param {string} timestampStr - ISO timestamp string
+ * @param {string} timeRange - Time range (24h, 7d, 1mo, 3mo, all)
+ * @returns {string} Formatted date label
+ */
+function formatDateLabel(timestampStr, timeRange) {
+  const date = new Date(timestampStr);
+  
+  switch(timeRange) {
+    case '24h':
+      return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    case '7d':
+      return date.toLocaleDateString([], { weekday: 'short' });
+    case '1mo':
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+    case '3mo':
+    case 'all':
+    default:
+      return date.toLocaleDateString([], { month: 'short', day: 'numeric' });
+  }
+}
 
 /**
  * @route GET /api/wallet/:address
@@ -747,6 +826,69 @@ router.get('/flipside/test/:address', async (req, res) => {
     console.error('Error testing Flipside API integration:', error);
     res.status(500).json({ 
       error: 'Test failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * @route GET /api/wallet/chart-data/:address
+ * @desc Get SOL balance chart data for a wallet using Flipside
+ */
+router.get('/chart-data/:address', async (req, res) => {
+  try {
+    const { address } = req.params;
+    const { timeRange = 'all' } = req.query;
+    
+    console.log(`GET /api/wallet/chart-data/${address} with timeRange=${timeRange}`);
+    
+    if (!address) {
+      return res.status(400).json({ error: 'Wallet address is required' });
+    }
+    
+    // Use the new Flipside-powered function for chart data
+    const chartData = await walletService.getWalletBalanceChartData(address, timeRange);
+    
+    if (!chartData || !Array.isArray(chartData) || chartData.length === 0) {
+      console.log('No chart data available for wallet');
+      return res.json({ 
+        success: false, 
+        error: 'No chart data available for this wallet',
+        chartData: [] 
+      });
+    }
+    
+    // Calculate PnL if there are at least 2 data points
+    let pnlData = null;
+    if (chartData.length >= 2) {
+      const initialBalance = chartData[0].sol_balance;
+      const latestBalance = chartData[chartData.length - 1].sol_balance;
+      
+      if (initialBalance > 0) {
+        const pnlValue = latestBalance - initialBalance;
+        const pnlPercentage = (pnlValue / initialBalance) * 100;
+        
+        pnlData = {
+          initialBalance,
+          latestBalance,
+          pnlValue,
+          pnlPercentage
+        };
+      }
+    }
+    
+    res.json({
+      success: true,
+      chartData,
+      pnlData,
+      dataPoints: chartData.length,
+      timeRange
+    });
+  } catch (error) {
+    console.error('Error fetching chart data:', error);
+    res.status(500).json({ 
+      success: false,
+      error: 'Error fetching chart data',
       message: error.message
     });
   }

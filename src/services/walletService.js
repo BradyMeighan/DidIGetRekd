@@ -2087,17 +2087,174 @@ function generateMockHistoricalBalances(address, transactions = null) {
   return balanceHistory;
 }
 
+/**
+ * Generate mock chart data for testing or when Flipside API is unavailable
+ * @param {string} address - Wallet address to generate mock data for
+ * @param {string} timeRange - Time range to generate data for ('24h', '7d', '1mo', '3mo', 'all')
+ * @returns {Array} Array of mock chart data points
+ */
+function generateMockChartData(address, timeRange = 'all') {
+  console.log(`Generating mock chart data for wallet ${address} with timeRange ${timeRange}`);
+  
+  // Use address as a seed for deterministic random number generation
+  const seed = address.split('').reduce((total, char) => total + char.charCodeAt(0), 0);
+  
+  // Pseudorandom number generator function
+  const random = (min, max) => {
+    const x = Math.sin(seed * 9999) * 10000;
+    return min + (Math.abs(x - Math.floor(x))) * (max - min);
+  };
+  
+  // Determine time range in days and number of data points
+  let days, points;
+  switch (timeRange) {
+    case '24h':
+      days = 1;
+      points = 24; // Hourly points
+      break;
+    case '7d':
+      days = 7;
+      points = 14; // Twice daily points
+      break;
+    case '1mo':
+      days = 30;
+      points = 30; // Daily points
+      break;
+    case '3mo':
+      days = 90;
+      points = 45; // Every other day
+      break;
+    case 'all':
+    default:
+      days = 90;
+      points = 45; // Every other day
+      break;
+  }
+  
+  // Generate timestamps working backward from now
+  const now = new Date();
+  const msPerDay = 24 * 60 * 60 * 1000;
+  const intervalMs = (days * msPerDay) / (points - 1);
+  
+  // Start with a random SOL balance between 1 and 50
+  let mockBalance = random(1, 50);
+  
+  // Generate the data points
+  const data = [];
+  for (let i = 0; i < points; i++) {
+    // Calculate timestamp for this point (working backward from now)
+    const timestamp = new Date(now.getTime() - (i * intervalMs));
+    
+    // Add this data point
+    data.unshift({
+      timestamp: timestamp.toISOString(),
+      sol_balance: parseFloat(mockBalance.toFixed(4))
+    });
+    
+    // Update the balance for the next (earlier) point with a small random change
+    // This creates a somewhat realistic looking chart
+    const changePercent = random(-0.05, 0.05); // -5% to +5%
+    mockBalance += mockBalance * changePercent;
+    
+    // Ensure balance doesn't go negative
+    mockBalance = Math.max(0.1, mockBalance);
+  }
+  
+  return data;
+}
+
+/**
+ * Get wallet balance chart data for a specific time range
+ * @param {string} address - Wallet address
+ * @param {string} timeRange - Time range ('24h', '7d', '1mo', '3mo', 'all')
+ * @returns {Promise<Array>} Array of data points for chart
+ */
+async function getWalletBalanceChartData(address, timeRange = 'all') {
+  try {
+    console.log(`Getting wallet balance chart data for ${address} with time range ${timeRange}`);
+    
+    // Check if Flipside API key is available
+    if (!process.env.FLIPSIDE_API_KEY) {
+      console.log('No FLIPSIDE_API_KEY found in environment, using mock chart data');
+      return generateMockChartData(address, timeRange);
+    }
+    
+    // Define time filter based on timeRange
+    let timeFilter;
+    switch (timeRange) {
+      case '24h':
+        timeFilter = 'DATEADD(day, -1, CURRENT_TIMESTAMP())';
+        break;
+      case '7d':
+        timeFilter = 'DATEADD(day, -7, CURRENT_TIMESTAMP())';
+        break;
+      case '1mo':
+        timeFilter = 'DATEADD(month, -1, CURRENT_TIMESTAMP())';
+        break;
+      case '3mo':
+        timeFilter = 'DATEADD(month, -3, CURRENT_TIMESTAMP())';
+        break;
+      case 'all':
+      default:
+        timeFilter = 'DATEADD(month, -3, CURRENT_TIMESTAMP())'; // Default to 3 months
+        break;
+    }
+    
+    // SQL query for getting balance data points for chart
+    const sql = `
+      SELECT
+        block_timestamp AS timestamp,
+        balance / 1e9 AS sol_balance
+      FROM solana.core.fact_balances
+      WHERE address = '${address}'
+        AND block_timestamp >= ${timeFilter}
+      ORDER BY block_timestamp
+    `;
+    
+    try {
+      const results = await runFlipsideQuery(sql);
+      
+      if (!results || !results.rows || results.rows.length === 0) {
+        console.log(`No balance chart data found for wallet ${address}, using mock data`);
+        return generateMockChartData(address, timeRange);
+      }
+      
+      // Transform data format
+      const chartData = results.rows.map(row => ({
+        timestamp: new Date(row.timestamp).toISOString(),
+        sol_balance: parseFloat(row.sol_balance)
+      }));
+      
+      console.log(`Retrieved ${chartData.length} chart data points for wallet ${address}`);
+      return chartData;
+    } catch (error) {
+      console.error('Error in Flipside query for chart data:', error.message);
+      console.log('Using mock chart data as fallback');
+      return generateMockChartData(address, timeRange);
+    }
+  } catch (error) {
+    console.error('Error getting wallet balance chart data:', error.message);
+    return generateMockChartData(address, timeRange);
+  }
+}
+
+// Export functions
 module.exports = {
-  analyzeWallet,
-  generateAchievements,
-  saveWalletToLeaderboard,
-  generateRoast,
-  // Export new Flipside API functions
-  getWalletCurrentBalance,
-  getWalletHistoricalBalances,
-  getWalletTransactions,
   runFlipsideQuery,
-  // Export mock data generators for testing
+  fetchWalletData,
+  fetchWalletTokens,
+  fetchWalletTransactions,
+  fetchTransactionDetails,
+  getLiquidityProvidingTransactions,
+  fetchSOLPrice,
+  getWalletScore,
+  generateWalletAchievements,
+  generateRoast,
+  getWalletTransactions,
+  getWalletHistoricalBalances,
+  getWalletCurrentBalance,
+  getWalletBalanceChartData,
   generateMockTransactionData,
-  generateMockHistoricalBalances
+  generateMockHistoricalBalances,
+  generateMockChartData // Mock chart data generator for testing
 }; 

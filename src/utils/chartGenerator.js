@@ -6,12 +6,13 @@ const { createCanvas } = require('canvas');
  * @param {Array} data - Array of {value, label} points
  * @param {boolean} darkMode - Whether to use dark mode colors
  * @param {boolean} compactMode - Whether to use compact mode for share modal (no labels, simplified)
+ * @param {string} chartType - Chart type ('balance' or 'pnl')
  * @returns {string} - Base64 encoded PNG image
  */
-function generateChart(data, darkMode = false, compactMode = false) {
+function generateChart(data, darkMode = false, compactMode = false, chartType = 'balance') {
   try {
     console.log('Starting chart generation with data:', JSON.stringify(data));
-    console.log('Chart options:', { darkMode, compactMode });
+    console.log('Chart options:', { darkMode, compactMode, chartType });
     
     // Input validation with detailed error messages
     if (!data) {
@@ -81,10 +82,20 @@ function generateChart(data, darkMode = false, compactMode = false) {
     console.log('Processed values:', values);
     console.log('Processed labels:', labels);
     
-    // Calculate data range with safety checks
-    const minValue = Math.max(0, Math.min(...values) * 0.9);
-    const maxValue = Math.max(...values) * 1.1 || 1; // Fallback to 1 if max is 0
-    const valueRange = maxValue - minValue || 1; // Avoid division by zero
+    // Calculate data range with safety checks for different chart types
+    let minValue, maxValue, valueRange;
+    
+    if (chartType === 'pnl') {
+      // For PnL charts, ensure we include 0 in the range
+      minValue = Math.min(0, ...values) * 1.1; // Multiply by 1.1 to add padding for negatives
+      maxValue = Math.max(0, ...values) * 1.1; // Multiply by 1.1 to add padding for positives
+      valueRange = maxValue - minValue || 100; // Default to 100 range if all values are 0
+    } else {
+      // For balance charts, start from 0 or slightly lower than min value
+      minValue = Math.max(0, Math.min(...values) * 0.9);
+      maxValue = Math.max(...values) * 1.1 || 1; // Fallback to 1 if max is 0
+      valueRange = maxValue - minValue || 1; // Avoid division by zero
+    }
     
     // Determine colors based on mode and trend
     const trendIsUp = values[values.length - 1] >= values[0];
@@ -99,7 +110,9 @@ function generateChart(data, darkMode = false, compactMode = false) {
       area: trendIsUp 
         ? (darkMode ? 'rgba(34, 197, 94, 0.2)' : 'rgba(22, 163, 74, 0.15)') 
         : (darkMode ? 'rgba(239, 68, 68, 0.2)' : 'rgba(220, 38, 38, 0.15)'),
-      grid: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
+      grid: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)',
+      // Add zero line color for PnL charts
+      zeroLine: darkMode ? 'rgba(255, 255, 255, 0.5)' : 'rgba(0, 0, 0, 0.5)'
     };
     
     // Canvas setup - adjust dimensions for compact mode
@@ -123,14 +136,20 @@ function generateChart(data, darkMode = false, compactMode = false) {
       ctx.fillStyle = colors.text;
       ctx.font = 'bold 16px Arial, sans-serif';
       ctx.textAlign = 'center';
-      ctx.fillText('SOL Balance Over Time', width / 2, 20);
+      
+      // Set appropriate title based on chart type
+      const title = chartType === 'pnl' ? 'PnL Over Time (%)' : 'SOL Balance Over Time';
+      ctx.fillText(title, width / 2, 20);
       
       // Draw y-axis label
       ctx.save();
       ctx.translate(15, height / 2);
       ctx.rotate(-Math.PI / 2);
       ctx.textAlign = 'center';
-      ctx.fillText('SOL Balance', 0, 0);
+      
+      // Set appropriate y-axis label based on chart type
+      const yLabel = chartType === 'pnl' ? 'PnL (%)' : 'SOL Balance';
+      ctx.fillText(yLabel, 0, 0);
       ctx.restore();
     }
     
@@ -157,7 +176,32 @@ function generateChart(data, darkMode = false, compactMode = false) {
         ctx.fillStyle = colors.text;
         ctx.font = '12px Arial, sans-serif';
         ctx.textAlign = 'right';
-        ctx.fillText(value.toFixed(2), padding.left - 10, y + 4);
+        
+        // Format labels based on chart type
+        const label = chartType === 'pnl' 
+          ? `${value.toFixed(1)}%` 
+          : value.toFixed(2);
+        
+        ctx.fillText(label, padding.left - 10, y + 4);
+      }
+      
+      // For PnL charts, draw a special zero line if 0 is within the range
+      if (chartType === 'pnl' && minValue <= 0 && maxValue >= 0) {
+        // Calculate the y-position of the zero line
+        const zeroY = padding.top + chartHeight - ((0 - minValue) / valueRange) * chartHeight;
+        
+        ctx.beginPath();
+        ctx.moveTo(padding.left, zeroY);
+        ctx.lineTo(width - padding.right, zeroY);
+        ctx.strokeStyle = colors.zeroLine;
+        ctx.lineWidth = 1.5;
+        ctx.stroke();
+        
+        // Add "0%" label to the zero line
+        ctx.fillStyle = colors.text;
+        ctx.font = 'bold 12px Arial, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText('0%', padding.left - 10, zeroY + 4);
       }
     } else {
       // In compact mode, just draw subtle horizontal lines
@@ -170,6 +214,18 @@ function generateChart(data, darkMode = false, compactMode = false) {
         ctx.beginPath();
         ctx.moveTo(padding.left, y);
         ctx.lineTo(width - padding.right, y);
+        ctx.stroke();
+      }
+      
+      // For PnL charts in compact mode, still draw the zero line
+      if (chartType === 'pnl' && minValue <= 0 && maxValue >= 0) {
+        const zeroY = padding.top + chartHeight - ((0 - minValue) / valueRange) * chartHeight;
+        
+        ctx.beginPath();
+        ctx.moveTo(padding.left, zeroY);
+        ctx.lineTo(width - padding.right, zeroY);
+        ctx.strokeStyle = colors.zeroLine;
+        ctx.lineWidth = 1;
         ctx.stroke();
       }
     }
@@ -207,39 +263,110 @@ function generateChart(data, darkMode = false, compactMode = false) {
         return { x, y };
       });
       
-      // Draw area under the line
-      ctx.beginPath();
-      ctx.moveTo(points[0].x, padding.top + chartHeight); // Start at bottom left
+      // Calculate zero Y position for PnL charts (for fill above/below)
+      const zeroY = chartType === 'pnl' && minValue <= 0 
+        ? padding.top + chartHeight - ((0 - minValue) / valueRange) * chartHeight 
+        : padding.top + chartHeight;
       
-      // Draw up to first point
-      ctx.lineTo(points[0].x, points[0].y);
-      
-      // Draw line through all points
-      for (let i = 1; i < points.length; i++) {
-        // Use bezier curve for smoother lines
-        const prevPoint = points[i - 1];
-        const currentPoint = points[i];
+      // For PnL charts, fill differently above and below the zero line
+      if (chartType === 'pnl' && minValue <= 0 && maxValue >= 0) {
+        // First detect segments that are above or below zero
+        let currentSegment = [];
+        let segmentType = values[0] >= 0 ? 'above' : 'below';
         
-        // Control points for curve
-        const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
-        const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
+        for (let i = 0; i < points.length; i++) {
+          const point = points[i];
+          const value = values[i];
+          const newType = value >= 0 ? 'above' : 'below';
+          
+          // If we've crossed the zero line, draw the current segment and start a new one
+          if (newType !== segmentType && currentSegment.length > 0) {
+            drawAreaSegment(currentSegment, segmentType === 'above', zeroY);
+            currentSegment = [];
+            segmentType = newType;
+          }
+          
+          currentSegment.push(point);
+          
+          // If we're at the end, draw the final segment
+          if (i === points.length - 1 && currentSegment.length > 0) {
+            drawAreaSegment(currentSegment, segmentType === 'above', zeroY);
+          }
+        }
+      } else {
+        // For balance charts, fill area under the line normally
+        ctx.beginPath();
+        ctx.moveTo(points[0].x, zeroY); // Start at bottom left
         
-        ctx.bezierCurveTo(
-          cp1x, prevPoint.y,
-          cp2x, currentPoint.y,
-          currentPoint.x, currentPoint.y
-        );
+        // Draw up to first point
+        ctx.lineTo(points[0].x, points[0].y);
+        
+        // Draw line through all points
+        for (let i = 1; i < points.length; i++) {
+          // Use bezier curve for smoother lines
+          const prevPoint = points[i - 1];
+          const currentPoint = points[i];
+          
+          // Control points for curve
+          const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
+          const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
+          
+          ctx.bezierCurveTo(
+            cp1x, prevPoint.y,
+            cp2x, currentPoint.y,
+            currentPoint.x, currentPoint.y
+          );
+        }
+        
+        // Close the path down to the x-axis
+        ctx.lineTo(points[points.length - 1].x, zeroY);
+        ctx.closePath();
+        
+        // Fill the area
+        ctx.fillStyle = colors.area;
+        ctx.fill();
       }
       
-      // Close the path down to the x-axis
-      ctx.lineTo(points[points.length - 1].x, padding.top + chartHeight);
-      ctx.closePath();
+      // Helper function to draw a segment of the area
+      function drawAreaSegment(segmentPoints, isAboveZero, zeroLine) {
+        if (segmentPoints.length === 0) return;
+        
+        ctx.beginPath();
+        ctx.moveTo(segmentPoints[0].x, zeroLine); // Start at the zero line
+        
+        // Draw up to first point
+        ctx.lineTo(segmentPoints[0].x, segmentPoints[0].y);
+        
+        // Draw line through all segment points
+        for (let i = 1; i < segmentPoints.length; i++) {
+          const prevPoint = segmentPoints[i - 1];
+          const currentPoint = segmentPoints[i];
+          
+          // Control points for curve
+          const cp1x = prevPoint.x + (currentPoint.x - prevPoint.x) / 3;
+          const cp2x = prevPoint.x + 2 * (currentPoint.x - prevPoint.x) / 3;
+          
+          ctx.bezierCurveTo(
+            cp1x, prevPoint.y,
+            cp2x, currentPoint.y,
+            currentPoint.x, currentPoint.y
+          );
+        }
+        
+        // Close the path down to the zero line
+        ctx.lineTo(segmentPoints[segmentPoints.length - 1].x, zeroLine);
+        ctx.closePath();
+        
+        // Fill with appropriate color (green for above, red for below)
+        if (isAboveZero) {
+          ctx.fillStyle = darkMode ? 'rgba(34, 197, 94, 0.2)' : 'rgba(22, 163, 74, 0.15)';
+        } else {
+          ctx.fillStyle = darkMode ? 'rgba(239, 68, 68, 0.2)' : 'rgba(220, 38, 38, 0.15)';
+        }
+        ctx.fill();
+      }
       
-      // Fill the area
-      ctx.fillStyle = colors.area;
-      ctx.fill();
-      
-      // Draw the line again over the area
+      // Draw the line over the area
       ctx.beginPath();
       ctx.moveTo(points[0].x, points[0].y);
       
@@ -264,12 +391,21 @@ function generateChart(data, darkMode = false, compactMode = false) {
       
       // Draw data points (smaller in compact mode)
       const pointRadius = compactMode ? 3 : 5;
-      points.forEach((point) => {
+      points.forEach((point, i) => {
         ctx.beginPath();
         ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
-        ctx.strokeStyle = colors.line;
+        
+        // Use green/red colors based on the value (for PnL charts)
+        if (chartType === 'pnl') {
+          ctx.strokeStyle = values[i] >= 0 
+            ? (darkMode ? '#22c55e' : '#16a34a')  // Green
+            : (darkMode ? '#ef4444' : '#dc2626'); // Red
+        } else {
+          ctx.strokeStyle = colors.line;
+        }
+        
         ctx.lineWidth = 2;
         ctx.stroke();
       });
@@ -280,10 +416,20 @@ function generateChart(data, darkMode = false, compactMode = false) {
         ctx.font = '12px Arial, sans-serif';
         ctx.textAlign = 'center';
         
-        labels.forEach((label, index) => {
-          const x = padding.left + (index / (labels.length - 1)) * chartWidth;
-          ctx.fillText(label, x, height - padding.bottom / 2);
-        });
+        // If we have many labels, draw a subset to avoid overcrowding
+        const maxLabelsToShow = Math.min(10, labels.length);
+        const labelStep = Math.ceil(labels.length / maxLabelsToShow);
+        
+        for (let i = 0; i < labels.length; i += labelStep) {
+          const x = padding.left + (i / (labels.length - 1)) * chartWidth;
+          ctx.fillText(labels[i], x, height - padding.bottom / 2);
+        }
+        
+        // Always show the last label
+        if (labels.length > 1 && (labels.length - 1) % labelStep !== 0) {
+          const x = padding.left + chartWidth;
+          ctx.fillText(labels[labels.length - 1], x, height - padding.bottom / 2);
+        }
       } else if (labels.length > 1) {
         // For compact mode, just draw first and last label
         ctx.fillStyle = colors.text;
