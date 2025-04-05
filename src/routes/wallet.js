@@ -34,11 +34,12 @@ router.get('/test', (req, res) => {
  */
 router.post('/chart', async (req, res) => {
   try {
-    const { data, darkMode } = req.body;
+    const { data, darkMode, compactMode } = req.body;
     
     console.log('Chart request received:', { 
       dataLength: data?.length || 0, 
       darkMode,
+      compactMode,
       sampleData: data?.slice(0, 2) 
     });
     
@@ -66,7 +67,7 @@ router.post('/chart', async (req, res) => {
     console.log(`Generating chart with ${cleanData.length} data points:`, cleanData);
     
     try {
-      const imageData = generateChart(cleanData, Boolean(darkMode));
+      const imageData = generateChart(cleanData, Boolean(darkMode), Boolean(compactMode));
       console.log('Chart generated successfully, image data length:', imageData?.length || 0);
       
       // Return the base64 encoded image with explicit success flag

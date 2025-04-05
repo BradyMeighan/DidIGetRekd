@@ -5,11 +5,13 @@ const { createCanvas } = require('canvas');
  * 
  * @param {Array} data - Array of {value, label} points
  * @param {boolean} darkMode - Whether to use dark mode colors
+ * @param {boolean} compactMode - Whether to use compact mode for share modal (no labels, simplified)
  * @returns {string} - Base64 encoded PNG image
  */
-function generateChart(data, darkMode = false) {
+function generateChart(data, darkMode = false, compactMode = false) {
   try {
     console.log('Starting chart generation with data:', JSON.stringify(data));
+    console.log('Chart options:', { darkMode, compactMode });
     
     // Input validation with detailed error messages
     if (!data) {
@@ -100,10 +102,14 @@ function generateChart(data, darkMode = false) {
       grid: darkMode ? 'rgba(255, 255, 255, 0.1)' : 'rgba(0, 0, 0, 0.1)'
     };
     
-    // Canvas setup
+    // Canvas setup - adjust dimensions for compact mode
     const width = 800;
     const height = 400;
-    const padding = { top: 40, right: 20, bottom: 60, left: 60 };
+    
+    // Adjust padding for compact mode (minimal padding for modal view)
+    const padding = compactMode 
+      ? { top: 10, right: 5, bottom: 20, left: 5 }
+      : { top: 40, right: 20, bottom: 60, left: 60 };
     
     const canvas = createCanvas(width, height);
     const ctx = canvas.getContext('2d');
@@ -112,43 +118,60 @@ function generateChart(data, darkMode = false) {
     ctx.fillStyle = colors.background;
     ctx.fillRect(0, 0, width, height);
     
-    // Draw title
-    ctx.fillStyle = colors.text;
-    ctx.font = 'bold 16px Arial';
-    ctx.textAlign = 'center';
-    ctx.fillText('SOL Balance Over Time', width / 2, 20);
-    
-    // Draw y-axis label
-    ctx.save();
-    ctx.translate(15, height / 2);
-    ctx.rotate(-Math.PI / 2);
-    ctx.textAlign = 'center';
-    ctx.fillText('SOL Balance', 0, 0);
-    ctx.restore();
+    // Draw title if not in compact mode
+    if (!compactMode) {
+      ctx.fillStyle = colors.text;
+      ctx.font = 'bold 16px Arial, sans-serif';
+      ctx.textAlign = 'center';
+      ctx.fillText('SOL Balance Over Time', width / 2, 20);
+      
+      // Draw y-axis label
+      ctx.save();
+      ctx.translate(15, height / 2);
+      ctx.rotate(-Math.PI / 2);
+      ctx.textAlign = 'center';
+      ctx.fillText('SOL Balance', 0, 0);
+      ctx.restore();
+    }
     
     // Calculate chart area
     const chartWidth = width - padding.left - padding.right;
     const chartHeight = height - padding.top - padding.bottom;
     
-    // Draw grid lines
-    ctx.strokeStyle = colors.grid;
-    ctx.lineWidth = 1;
-    
-    // Horizontal grid lines
-    const numGridLines = 5;
-    for (let i = 0; i <= numGridLines; i++) {
-      const y = padding.top + chartHeight - (i / numGridLines) * chartHeight;
-      ctx.beginPath();
-      ctx.moveTo(padding.left, y);
-      ctx.lineTo(width - padding.right, y);
-      ctx.stroke();
+    // Draw grid lines (skip in compact mode)
+    if (!compactMode) {
+      ctx.strokeStyle = colors.grid;
+      ctx.lineWidth = 1;
       
-      // Draw y-axis labels
-      const value = minValue + (i / numGridLines) * valueRange;
-      ctx.fillStyle = colors.text;
-      ctx.font = '12px Arial';
-      ctx.textAlign = 'right';
-      ctx.fillText(value.toFixed(2), padding.left - 10, y + 4);
+      // Horizontal grid lines
+      const numGridLines = 5;
+      for (let i = 0; i <= numGridLines; i++) {
+        const y = padding.top + chartHeight - (i / numGridLines) * chartHeight;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(width - padding.right, y);
+        ctx.stroke();
+        
+        // Draw y-axis labels
+        const value = minValue + (i / numGridLines) * valueRange;
+        ctx.fillStyle = colors.text;
+        ctx.font = '12px Arial, sans-serif';
+        ctx.textAlign = 'right';
+        ctx.fillText(value.toFixed(2), padding.left - 10, y + 4);
+      }
+    } else {
+      // In compact mode, just draw subtle horizontal lines
+      ctx.strokeStyle = colors.grid;
+      ctx.lineWidth = 0.5;
+      
+      // Draw 3 simple horizontal lines for visual reference
+      for (let i = 0; i < 3; i++) {
+        const y = padding.top + (i / 2) * chartHeight;
+        ctx.beginPath();
+        ctx.moveTo(padding.left, y);
+        ctx.lineTo(width - padding.right, y);
+        ctx.stroke();
+      }
     }
     
     // Draw chart points with checks for sufficient data
@@ -169,11 +192,13 @@ function generateChart(data, darkMode = false) {
       ctx.lineWidth = 2;
       ctx.stroke();
       
-      // Add a label explaining the issue
-      ctx.fillStyle = colors.text;
-      ctx.font = '14px Arial';
-      ctx.textAlign = 'center';
-      ctx.fillText('Insufficient data for detailed chart', width / 2, height / 2 - 40);
+      // Add a label explaining the issue (not in compact mode)
+      if (!compactMode) {
+        ctx.fillStyle = colors.text;
+        ctx.font = '14px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        ctx.fillText('Insufficient data for detailed chart', width / 2, height / 2 - 40);
+      }
     } else {
       // Normal chart with multiple points
       const points = values.map((value, index) => {
@@ -237,10 +262,11 @@ function generateChart(data, darkMode = false) {
       ctx.lineWidth = 2;
       ctx.stroke();
       
-      // Draw data points
+      // Draw data points (smaller in compact mode)
+      const pointRadius = compactMode ? 3 : 5;
       points.forEach((point) => {
         ctx.beginPath();
-        ctx.arc(point.x, point.y, 5, 0, Math.PI * 2);
+        ctx.arc(point.x, point.y, pointRadius, 0, Math.PI * 2);
         ctx.fillStyle = '#ffffff';
         ctx.fill();
         ctx.strokeStyle = colors.line;
@@ -248,15 +274,28 @@ function generateChart(data, darkMode = false) {
         ctx.stroke();
       });
       
-      // Draw x-axis labels
-      ctx.fillStyle = colors.text;
-      ctx.font = '12px Arial';
-      ctx.textAlign = 'center';
-      
-      labels.forEach((label, index) => {
-        const x = padding.left + (index / (labels.length - 1)) * chartWidth;
-        ctx.fillText(label, x, height - padding.bottom / 2);
-      });
+      // Draw x-axis labels (skip in compact mode or draw smaller)
+      if (!compactMode) {
+        ctx.fillStyle = colors.text;
+        ctx.font = '12px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        
+        labels.forEach((label, index) => {
+          const x = padding.left + (index / (labels.length - 1)) * chartWidth;
+          ctx.fillText(label, x, height - padding.bottom / 2);
+        });
+      } else if (labels.length > 1) {
+        // For compact mode, just draw first and last label
+        ctx.fillStyle = colors.text;
+        ctx.font = '9px Arial, sans-serif';
+        ctx.textAlign = 'center';
+        
+        // Draw first label
+        ctx.fillText(labels[0], padding.left, height - 5);
+        
+        // Draw last label
+        ctx.fillText(labels[labels.length - 1], width - padding.right, height - 5);
+      }
     }
     
     // Convert canvas to base64
@@ -280,16 +319,16 @@ function generateChart(data, darkMode = false) {
       
       // Draw error message
       ctx.fillStyle = darkMode ? '#ffffff' : '#333333';
-      ctx.font = 'bold 16px Arial';
+      ctx.font = 'bold 16px Arial, sans-serif';
       ctx.textAlign = 'center';
       ctx.fillText('Error Generating Chart', width / 2, 50);
       
       // Draw detailed error message
-      ctx.font = '14px Arial';
+      ctx.font = '14px Arial, sans-serif';
       ctx.fillText(error.message, width / 2, 100);
       
       // Draw hint for troubleshooting
-      ctx.font = '12px Arial';
+      ctx.font = '12px Arial, sans-serif';
       ctx.fillText('Check the server logs for more details', width / 2, 140);
       
       // Convert canvas to base64
