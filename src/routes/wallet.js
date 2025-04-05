@@ -2,8 +2,8 @@ const express = require('express');
 const router = express.Router();
 const walletService = require('../services/walletService');
 const axios = require('axios');
-const { PythonShell } = require('python-shell');
 const path = require('path');
+const { generateChart } = require('../utils/chartGenerator');
 
 /**
  * @route GET /api/wallet/test
@@ -598,7 +598,7 @@ router.get('/token/:mintAddress', async (req, res) => {
 
 /**
  * POST /api/wallet/chart
- * Generate a chart from transaction data using matplotlib
+ * Generate a chart from transaction data using Node.js Canvas
  */
 router.post('/chart', async (req, res) => {
   try {
@@ -614,30 +614,14 @@ router.post('/chart', async (req, res) => {
       label: String(point.label || '')
     }));
     
-    // Prepare options for PythonShell
-    const options = {
-      mode: 'text',
-      pythonPath: 'python', // Use system python
-      scriptPath: path.join(__dirname, '../charts'),
-      args: [
-        JSON.stringify(cleanData),
-        Boolean(darkMode).toString()
-      ]
-    };
-    
-    // Call the Python script
-    const result = await new Promise((resolve, reject) => {
-      PythonShell.run('generate_chart.py', options, (err, results) => {
-        if (err) return reject(err);
-        if (!results || results.length === 0) return reject(new Error('No chart data returned'));
-        resolve(results[0]); // Get the base64 string from the output
-      });
-    });
+    // Generate chart using our JavaScript chart generator
+    console.log(`Generating chart with ${cleanData.length} data points`);
+    const imageData = generateChart(cleanData, Boolean(darkMode));
     
     // Return the base64 encoded image
     return res.json({
       success: true,
-      imageData: result
+      imageData
     });
   } catch (error) {
     console.error('Error generating chart:', error);
